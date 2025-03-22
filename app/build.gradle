@@ -1,0 +1,80 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.k2fsa.sherpa.ncnn'
+    compileSdk 34
+
+    defaultConfig {
+
+        applicationId "com.k2fsa.sherpa.ncnn"
+        minSdk 31
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += 'arm64-v8a'
+        }
+//        ndk {
+//            // Add NDK properties if wanted, e.g.
+//            abiFilters += listOf("arm64-v8a")
+//        }
+    }
+
+    packagingOptions {
+        resources {
+            // 选择只保留一个 META-INF/INDEX.LIST 文件
+            pickFirst 'META-INF/INDEX.LIST'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11 // 同步 Java 源代码兼容性
+        targetCompatibility JavaVersion.VERSION_11 // 同步 Java 目标兼容性
+    }
+    kotlinOptions {
+        jvmTarget = '11' // 与 compileOptions 保持一致
+    }
+    aaptOptions {
+        noCompress "tflite"
+    }
+}
+
+dependencies {
+    // MediaPipe Hands for gesture recognition
+    implementation 'com.google.mediapipe:hands:0.10.0'
+    // MLKit Face Detection
+    implementation 'com.google.mlkit:face-detection:16.1.7'
+    // TensorFlow Lite for gender classification
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
+    implementation 'org.tensorflow:tensorflow-lite-task-vision:0.4.4'
+
+
+    implementation 'androidx.core:core-ktx:1.7.0'
+    implementation 'androidx.appcompat:appcompat:1.5.1'
+    implementation 'com.google.android.material:material:1.7.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.4'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.0'
+
+
+    implementation("io.ktor:ktor-client-core:2.3.9")
+    implementation("io.ktor:ktor-client-cio:2.3.9") // CIO 引擎
+    implementation("io.ktor:ktor-client-content-negotiation:2.3.9") // JSON 支持
+    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.9")
+    implementation("com.squareup.okio:okio:3.4.0")
+//    implementation("ch.qos.logback:logback-classic:1.4.14")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0") // 最新版本
+}
