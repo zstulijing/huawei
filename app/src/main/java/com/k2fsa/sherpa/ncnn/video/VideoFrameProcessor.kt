@@ -158,7 +158,7 @@ class VideoFrameProcessor(
     // Existing detection methods remain the same
     fun getFramesForGestureDetection(count: Int) = getLatestFrameBitmaps(count)
     fun getFramesForGenderDetection(count: Int) = getLatestFrameBitmaps(count)
-
+    fun getFramesForAllDetection(count: Int) = getLatestFrameBitmaps(count)
     /**
      * Converts YUV420 format to Bitmap
      */

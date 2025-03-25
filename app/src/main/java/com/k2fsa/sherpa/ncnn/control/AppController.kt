@@ -1,7 +1,6 @@
 package com.k2fsa.sherpa.ncnn.control
 
 import android.content.Context
-import android.gesture.Gesture
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import com.k2fsa.sherpa.ncnn.Gender
@@ -14,15 +13,25 @@ import com.k2fsa.sherpa.ncnn.SpeechRecognizer
 import com.k2fsa.sherpa.ncnn.video.CameraManager
 import com.k2fsa.sherpa.ncnn.video.VideoFrameProcessor
 import com.k2fsa.sherpa.ncnn.utils.Logger
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.log
-import androidx.lifecycle.MutableLiveData
+import com.k2fsa.sherpa.ncnn.algorithm.Algorithm
+import com.k2fsa.sherpa.ncnn.request.Request
+import com.k2fsa.sherpa.ncnn.speaker.AudioPlayer
 
+// 电量检测
+import com.k2fsa.sherpa.ncnn.status.StatusMonitor
+
+/**
+ * 查看网络实验 - tag:latency
+ * 查看电量/CPU/内存 - tag:usage
+ * 查看控制逻辑 - tag:control
+ * 查看模块结果 - tag:result
+ * 查看websocket - tag:websocket
+ */
 class AppController private constructor() {
     private val logger = Logger(this::class.java.simpleName)
     private val eventBus = EventBus()
@@ -36,9 +45,17 @@ class AppController private constructor() {
     private lateinit var videoFrameProcessor: VideoFrameProcessor
     private lateinit var gestureDetector: GestureDetector
     private lateinit var genderDetector: GenderDetector
+    // 扬声器
+    private lateinit var audioPlayer: AudioPlayer
 //    private lateinit var translationManager: TranslationManager
+    // 卸载算法
+    private lateinit var algorithm: Algorithm
+    // 控制逻辑
+    private lateinit var unloadController: UnloadController
 
+//    private lateinit var translationManager: LlmTranslator
     private lateinit var translationManager: LlmTranslator
+
     // Callbacks
     private var recognitionCallback: ((String) -> Unit)? = null
     private var translationCallback: ((String) -> Unit)? = null
@@ -56,10 +73,13 @@ class AppController private constructor() {
     //, assets: AssetManager
     private lateinit var context: Context
 
+    // 功耗检测
+    private lateinit var statusMonitor: StatusMonitor
+
     // request请求类
     private var request = Request()
     // 性别
-    private var parasmGender = "male"
+    private var paramGender = "male"
     /**
      * 卸载算法输出
      * [0]: 语音转文本，一定是0（安卓端）
@@ -68,7 +88,8 @@ class AppController private constructor() {
      * [3]: 图像识别男女
      * [4]: 图像识别手势
      */
-    private var outVecotr = intArrayOf(0, 0, 0, 0 ,0)
+    private var outVector = intArrayOf(0, -1, -1, -1, 0)
+
 
     fun initialize(activity: AppCompatActivity) {
         if (isInitialized) return
@@ -88,7 +109,20 @@ class AppController private constructor() {
         gestureDetector = GestureDetector(activity)
         genderDetector = GenderDetector(activity)
 //        translationManager = TranslationManager()
-        translationManager = LlmTranslator()
+        translationManager = LlmTranslator
+
+        // Initialize Speaker modules
+        audioPlayer = AudioPlayer()
+
+        algorithm = Algorithm()
+        // 初始化卸载向量
+//        outVector = algorithm.outputVector()
+
+        // 初始化卸载控制器
+        unloadController = UnloadController(outVector)
+
+        // 初始化监控器
+        statusMonitor = StatusMonitor(mainScope, context)
 
         setupEventListeners()
         isInitialized = true
@@ -132,38 +166,73 @@ class AppController private constructor() {
      * 捕获音频
      */
     fun startRecording() {
+
+        Log.e("xxx", "开始识别语音")
+
+
         checkInitialization()
         if (isRecording) return
 
         isRecording = true
         statusCallback?.invoke("Recording started")
 
+        // 测试监控
+//        statusMonitor.startPowerMonitoring()
+//        statusMonitor.startMemoryMonitoring()
+
+
         val job = Job() // 创建一个 Job 用于控制协程
         val scope = CoroutineScope(Dispatchers.IO + job)
+        // 测试websocket
+//        scope.launch {
+//            request.streamData()
+//        }
 
+
+        // 测试上行速率
+//        scope.launch {
+//            val upLatency = request.testUpSpeed(30)
+//            Log.e("latency", "上行延迟：$upLatency ms")
+//        }
+
+        // 测试播放
+//        val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+//        val filename = "chinese1.mp3"
+//        Log.e("speaker", "$storageDir/$filename")
+//        audioPlayer.playAudio("$storageDir/$filename") {
+//            Log.e("speaker", "播放成功")
+//        }
+
+
+
+        // 测试输出向量
+//        Log.e("vector", outVector.joinToString())
 
         audioRecorder.startRecording{ samples ->
 
-            var startRecordTime = System.currentTimeMillis() // 单位：毫秒
+            val startRecordTime = System.currentTimeMillis() // 单位：毫秒
+
             speechRecognizer.recognize(samples) { result ->
-                var endRecordTime = System.currentTimeMillis() // 单位：毫秒
-                Log.e("stt", "端侧语音转文本：结果：$result, 经过时间: ${endRecordTime - startRecordTime} ms")
+
+                val endRecordTime = System.currentTimeMillis() // 单位：毫秒
+                Log.e("xxx", "端侧语音转文本：结果：$result, 经过时间: ${endRecordTime - startRecordTime} ms")
 
                 /**
                  * {string} - result 语言转的文本
                  */
                 eventBus.publish(EventBus.Event.SPEECH_RESULT, result)
+
                 /**
                  * 中英互译
                  */
                 var translatedText = ""
-                if (outVecotr[1] == 0) {
+                if (outVector[1] == 0) {
                     // 安卓端执行
 
                     // 记录请求开始时间
                     val startTime = System.currentTimeMillis() // 单位：毫秒
 
-                    val translator = LlmTranslator()
+                    val translator = LlmTranslator
                     CoroutineScope(Dispatchers.Main).launch {
                         translatedText = translator.translate(result)
                         // 记录请求结束时间
@@ -180,16 +249,16 @@ class AppController private constructor() {
                         /**
                          * 文本转语音
                          */
-                        if (outVecotr[2] == 0) {
+                        if (outVector[2] == 0) {
                             // 安卓端执行
                             Log.e("" , "端测文本转语音")
-                        } else if (outVecotr[2] == 1) {
+                        } else if (outVector[2] == 1) {
                             // 服务器端执行
 
                             // 记录请求开始时间
                             val startTime2 = System.currentTimeMillis() // 单位：毫秒
 
-                            val filePath: String = request.textToSpeech(translatedText, context, parasmGender)
+                            val filePath: String = request.textToSpeech(translatedText, context, paramGender)
 
                             // 记录请求结束时间
                             val endTime2 = System.currentTimeMillis()
@@ -209,9 +278,8 @@ class AppController private constructor() {
 
 
 
-                } else if (outVecotr[1] == 1) {
+                } else if (outVector[1] == 1) {
                     // 服务器端执行
-
                     scope.launch {
                         // 记录请求开始时间
                         val startTime = System.currentTimeMillis() // 单位：毫秒
@@ -233,16 +301,16 @@ class AppController private constructor() {
                         /**
                          * 文本转语音
                          */
-                        if (outVecotr[2] == 0) {
+                        if (outVector[2] == 0) {
                             // 安卓端执行
                             Log.e("" , "端测文本转语音")
-                        } else if (outVecotr[2] == 1) {
+                        } else if (outVector[2] == 1) {
                             // 服务器端执行
 
                             // 记录请求开始时间
                             val startTime2 = System.currentTimeMillis() // 单位：毫秒
 
-                            val filePath: String = request.textToSpeech(translatedText, context, parasmGender)
+                            val filePath: String = request.textToSpeech(translatedText, context, paramGender)
 
                             // 记录请求结束时间
                             val endTime2 = System.currentTimeMillis()
@@ -266,6 +334,7 @@ class AppController private constructor() {
     }
 
     fun stopRecording() {
+
         checkInitialization()
         if (!isRecording) return
 
@@ -274,6 +343,10 @@ class AppController private constructor() {
 
         // Stop audio recording
         audioRecorder.stopRecording()
+
+        // 停止监控
+        statusMonitor.startMemoryMonitoring()
+        statusMonitor.stopPowerMonitoring()
     }
 
     fun onResume() {
@@ -327,10 +400,13 @@ class AppController private constructor() {
      * 捕获图像
      */
     private fun captureAndProcessVideoFrames() {
+
         val job = Job() // 创建一个 Job 用于控制协程
         val scope = CoroutineScope(Dispatchers.IO + job)
 
         cameraManager.captureFrames(5) { frames ->
+
+            // 对每个帧进行处理
             frames.forEach { frameInfo ->
                 videoFrameProcessor.addFrame(
                     frameInfo.data,
@@ -339,123 +415,54 @@ class AppController private constructor() {
                 )
             }
 
-            /**
-             * 图像识别男女
-             */
-            val genderFrames = videoFrameProcessor.getFramesForGenderDetection(1)
-            if (outVecotr[3] == 0) {
-                // 在安卓端执行
+            // 只取一帧frame
+            val frame = videoFrameProcessor.getFramesForAllDetection(1)
 
-                // 记录请求开始时间
-                val startTime = System.currentTimeMillis() // 单位：毫秒
+            // 先进行手势识别
+            scope.launch {
 
-                genderDetector.detectGender(genderFrames) { gender ->
-                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
-                    if (gender == Gender.MALE) {
-                        parasmGender = "male"
-                    } else if (gender == Gender.FEMALE) {
-                        parasmGender = "female"
+                val gesture: String = unloadController.gestureRecognition(gestureDetector, eventBus, request, frame)
+
+                Log.e("result", "手势识别结果为$gesture")
+
+                if (gesture == "none") {
+
+                    // 识别到none，此时可能正在录音，或还没开始录音
+                    if (isRecording) {
+
+                        // 正在录音，识别男女
+                        val gender: String = unloadController.genderRecognition(genderDetector, eventBus, request, frame)
+                        paramGender = gender
+                        Log.e("control", "正在录音，识别男女")
+                        Log.e("result", "识别男女结果$gender")
+
                     } else {
-                        parasmGender = "male"
+                        // 不需要识别男女
+                        Log.e("control", "还没开始录音，不需要识别男女")
                     }
-                    // 记录请求结束时间
-                    val endTime = System.currentTimeMillis()
 
-                    // 计算经过时间（单位：毫秒）
-                    val elapsedTime = endTime - startTime
-
-                    Log.e("xxx", "端测图像识别男女：结果: $parasmGender, 经过时间: $elapsedTime ms")
+                } else if (gesture == "fist") {
+                    // 识别到fist，此时可能想要结束录音，或想要开始录音
+                    if (isRecording) {
+                        // 结束录音，不需要识别男女
+                        Log.e("control", "录音结束，不需要识别男女")
+                    } else {
+                        // 开始录音，识别男女
+                        val gender: String = unloadController.genderRecognition(genderDetector, eventBus, request, frame)
+                        paramGender = gender
+                        Log.e("control", "开始录音，识别男女")
+                        Log.e("result", "识别男女结果$gender")
+                    }
                 }
-
-
-            } else if (outVecotr[3] == 1) {
-                // 在服务器端执行
-                scope.launch {
-                    // 记录请求开始时间
-                    val startTime = System.currentTimeMillis() // 单位：毫秒
-
-                    var result: String = request.genderRecognition(genderFrames)
-
-                    // 记录请求结束时间
-                    val endTime = System.currentTimeMillis()
-
-                    // 计算经过时间（单位：毫秒）
-                    val elapsedTime = endTime - startTime
-
-                    // 打印结果和经过时间
-                    Log.e("xxx", "边测图像识别男女：结果: $result, 经过时间: $elapsedTime ms")
-
-//                    parasmGender = result
-
-                    // 发布事件
-                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, result)
-
-                }
-
-
             }
 
 
-            /**
-             * 图像识别姿势
-             */
-            val gestureFrames = genderFrames
-            if (outVecotr[4] == 0) {
-                // 在安卓端执行
-                // 记录请求开始时间
-                val startTime = System.currentTimeMillis() // 单位：毫秒
-                var paramGesture = "none"
-                gestureDetector.detectGesture(gestureFrames) { gesture ->
-                    eventBus.publish(EventBus.Event.GESTURE_DETECTED, gesture)
-                    if (gesture == GestureDetector.GestureType.FIST) {
-                        paramGesture = "fist"
-                    } else if (gesture == GestureDetector.GestureType.NONE) {
-                        paramGesture = "none"
-                    }
-                    // 记录请求结束时间
-                    val endTime = System.currentTimeMillis()
-
-                    // 计算经过时间（单位：毫秒）
-                    val elapsedTime = endTime - startTime
-
-                    Log.e("xxx", "端测图像识别姿势：结果: $paramGesture, 经过时间: $elapsedTime ms")
-                }
 
 
-
-            } else if (outVecotr[4] == 1) {
-                // 在服务器执行
-//                Log.e("xxx", "服务器执行图像识别姿势")
-                scope.launch {
-                    // 记录请求开始时间
-                    val startTime = System.currentTimeMillis() // 单位：毫秒
-
-                    var result: String = request.gestureRecognition(gestureFrames)
-
-                    // 记录请求结束时间
-                    val endTime = System.currentTimeMillis()
-
-                    // 计算经过时间（单位：毫秒）
-                    val elapsedTime = endTime - startTime
-
-                    // 打印结果和经过时间
-                    Log.e("xxx", "边测姿势识别：结果: $result, 经过时间: $elapsedTime ms")
-
-                    var gesture = GestureDetector.GestureType.NONE
-                    // 发布事件
-                    if (result == "other") {
-                        gesture = GestureDetector.GestureType.NONE
-                    } else if (result == "fist") {
-                        gesture = GestureDetector.GestureType.FIST
-                    }
-
-//                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, result)
-                    eventBus.publish(EventBus.Event.GESTURE_DETECTED, gesture)
-
-                }
-            }
         }
     }
+
+
 
     fun setRecognitionCallback(callback: (String) -> Unit) {
         recognitionCallback = callback

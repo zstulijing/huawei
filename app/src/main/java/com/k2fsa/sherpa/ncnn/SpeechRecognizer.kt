@@ -5,13 +5,12 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val TAG = "SpeechRecognizer"
 
-/**
- * Wrapper class for SherpaNcnn that handles speech recognition
- */
 class SpeechRecognizer(
     private val assetManager: AssetManager,
     private val useGPU: Boolean = true,
@@ -21,6 +20,7 @@ class SpeechRecognizer(
     private lateinit var model: SherpaNcnn
     private var lastText: String = ""
     private var utteranceIndex: Int = 0
+    private val recognitionMutex = Mutex()
 
     init {
         initModel()
@@ -69,55 +69,35 @@ class SpeechRecognizer(
         model.reset(true)
         lastText = ""
     }
-    fun recognize(samples: FloatArray, recognitionCallback: ((String) -> Unit)?) {
 
+
+
+    fun recognize(samples: FloatArray, recognitionCallback: ((String) -> Unit)?) {
         CoroutineScope(Dispatchers.IO).launch {
-            model.acceptSamples(samples)
-            while (model.isReady()) {
-                model.decode()
-            }
-            val isEndpoint = model.isEndpoint()
-            val text = model.text
-            withContext(Dispatchers.Main) {
-                if (isEndpoint) {
-                    model.reset()
-                    if (text.isNotBlank()) {
-                        lastText = text
-                        recognitionCallback?.invoke(text)
-                        utteranceIndex++
+            recognitionMutex.withLock {
+                val startTime = System.currentTimeMillis()
+                model.acceptSamples(samples)
+                while (model.isReady()) {
+                    model.decode()
+                }
+
+                val isEndpoint = model.isEndpoint()
+                val text = model.text
+                val processingTime = System.currentTimeMillis() - startTime
+                withContext(Dispatchers.Main) {
+                    if (isEndpoint) {
+                        model.reset()
+                        if (text.isNotBlank()) {
+                            lastText = text
+                            Log.i(TAG, "语音识别结果：$lastText，处理时间：${processingTime}ms")
+                            recognitionCallback?.invoke(text)
+                            utteranceIndex++
+                        }
                     }
                 }
-                // 非端点情况不返回结果
             }
-
         }
-
     }
-//    fun recognize(samples: FloatArray,recognitionCallback: ((String) -> Unit)?) {
-//        CoroutineScope(Dispatchers.IO).launch {
-//            model.acceptSamples(samples)
-//            while (model.isReady()) {
-//                model.decode()
-//            }
-//
-//            val isEndpoint = model.isEndpoint()
-//            val text = model.text
-//
-////        if (text.isNotBlank()) {
-////            onPartialResultListener?.invoke(text)
-////        }
-//            withContext(Dispatchers.Main) {
-//                if (isEndpoint) {
-//                    model.reset()
-//                }
-//                if (text.isNotBlank()) {
-//                    lastText = text
-//                    recognitionCallback?.invoke(text)
-//                    utteranceIndex++
-//                }
-//            }
-//        }
-//    }
 
     fun shutdown() {
         // Additional cleanup if needed

@@ -13,6 +13,7 @@ import com.k2fsa.sherpa.ncnn.control.AppController
 import com.k2fsa.sherpa.ncnn.gesture.GestureDetector
 import com.k2fsa.sherpa.ncnn.utils.Logger
 
+
 class MainActivity : AppCompatActivity() {
     private val logger = Logger(this::class.java.simpleName)
     private lateinit var appController: AppController
@@ -32,7 +33,6 @@ class MainActivity : AppCompatActivity() {
     private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
         Manifest.permission.RECORD_AUDIO
-
     )
 
     private val requestPermissionLauncher = registerForActivityResult(
