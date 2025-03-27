@@ -14,7 +14,8 @@ class EventBus {
         TRANSLATION_RESULT,
         GESTURE_DETECTED,
         GENDER_DETECTED,
-        ERROR
+        ERROR,
+        TEXT_TO_SOUND
     }
 
     fun subscribe(event: Event, listener: (Any) -> Unit) {

@@ -2,23 +2,88 @@ package com.k2fsa.sherpa.ncnn.control
 
 import android.graphics.Bitmap
 import android.util.Log
+import android.view.translation.TranslationManager
 import com.k2fsa.sherpa.ncnn.Gender
 import com.k2fsa.sherpa.ncnn.GenderDetector
+import com.k2fsa.sherpa.ncnn.SpeechRecognizer
 import com.k2fsa.sherpa.ncnn.gesture.GestureDetector
 import com.k2fsa.sherpa.ncnn.request.Request
+import com.k2fsa.sherpa.ncnn.translation.LlmTranslator
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 class UnloadController(private var outVector: IntArray) {
     /**
      * 设置新的卸载向量
      */
-    public fun setOutVector(newOutVector: IntArray) {
+    fun setOutVector(newOutVector: IntArray) {
         this.outVector = newOutVector
     }
 
     /**
-     * 调用手势识别
+     * 语音转文本
+     * @return {String} result - 识别的文本
+     */
+     suspend fun soundToText(
+        speechRecognizer: SpeechRecognizer,
+        eventBus: EventBus,
+        request: Request,
+        samples: FloatArray
+    ): String {
+
+        return when (outVector[0]) {
+            0 -> {
+                // 安卓端执行
+                val startRecordTime = System.currentTimeMillis()
+                suspendCoroutine { continuation ->
+                    speechRecognizer.recognize(samples) { result ->
+                        val endRecordTime = System.currentTimeMillis()
+                        Log.e("xxx", "端侧语音转文本：结果：$result, 经过时间: ${endRecordTime - startRecordTime} ms")
+                        eventBus.publish(EventBus.Event.SPEECH_RESULT, result)
+                        continuation.resume(result) // 将结果返回给挂起函数
+                    }
+                }
+            }
+            1 -> {
+                // 服务器端执行（待实现）
+                "服务器端语音转文本尚未实现"
+            }
+            else -> {
+                ""
+            }
+        }
+
+    }
+
+    /**
+     * 中英互译
+     */
+    suspend fun translate(result: String, translationManager: LlmTranslator, callback: suspend () -> Unit) {
+        if (outVector[1] == 0) { // 在安卓端执行
+
+            val startTime = System.currentTimeMillis() // 单位：毫秒
+
+            val translatedResult = translationManager.translate(result)
+            // 记录请求结束时间
+            val endTime = System.currentTimeMillis()
+
+            // 计算经过时间（单位：毫秒）
+            val elapsedTime = endTime - startTime
+            Log.e("xxx", "端测中英互译：结果: $translatedResult, 经过时间：$elapsedTime ms")
+
+        } else if (outVector[1] == 1) { // 在服务器端执行
+            callback()
+        }
+    }
+
+
+    /**
+     *
+     */
+
+    /**
+     * 图像识别手势
      * @return {String} result - "fist"/"none"
      */
     public suspend fun gestureRecognition(
@@ -50,19 +115,6 @@ class UnloadController(private var outVector: IntArray) {
             val endTime = System.currentTimeMillis()
             val elapsedTime = endTime - startTime
             Log.e("xxx", "端测图像识别姿势---结果：$result, 经过时间：$elapsedTime ms")
-
-//            gestureDetector.detectGesture(frame) { gesture ->
-//                eventBus.publish(EventBus.Event.GESTURE_DETECTED, gesture)
-//                if (gesture == GestureDetector.GestureType.FIST) {
-//                    result = "fist"
-//                } else if (gesture == GestureDetector.GestureType.NONE) {
-//                    result = "none"
-//                }
-//                val endTime = System.currentTimeMillis()
-//                val elapsedTime = endTime - startTime
-//                Log.e("xxx", "端测图像识别姿势---结果：$result, 经过时间：$elapsedTime ms")
-
-//            }
 
 
         } else if (outVector[4] == 1) { // 在服务器执行
@@ -105,26 +157,6 @@ class UnloadController(private var outVector: IntArray) {
 
         if (outVector[3] == 0) {
 
-            // 在安卓端执行
-//            val startTime = System.currentTimeMillis()
-//            genderDetector.detectGender(frame) { gender ->
-//
-//                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
-//
-//                if (gender == Gender.MALE) {
-//                    result = "male"
-//                } else if (gender == Gender.FEMALE) {
-//                    result = "female"
-//                } else {
-//                    result = "male"
-//                }
-//
-//                val endTime = System.currentTimeMillis()
-//
-//                val elapsedTime = endTime - startTime
-//
-//                Log.e("xxx", "端测图像识别男女：结果: $result, 经过时间: $elapsedTime ms")
-//            }
             val startTime = System.currentTimeMillis()
             val gender = suspendCancellableCoroutine<Gender> { continuation ->
                 genderDetector.detectGender(frame) { detectedGender ->
@@ -133,7 +165,7 @@ class UnloadController(private var outVector: IntArray) {
             }
 
             // 发布事件并设置 result
-            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
+//            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
             result = when (gender) {
                 Gender.MALE -> "male"
                 Gender.FEMALE -> "female"

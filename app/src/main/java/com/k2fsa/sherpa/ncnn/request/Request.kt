@@ -1,30 +1,25 @@
 package com.k2fsa.sherpa.ncnn.request
 
-
 import android.content.Context
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.client.engine.cio.*
 import io.ktor.http.*
-import io.ktor.util.*
 import java.io.File
 import android.util.Base64
 import android.graphics.Bitmap
 import android.os.Environment
 import android.util.Log
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import io.ktor.client.call.body
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import java.io.ByteArrayOutputStream
 import org.json.JSONObject
-import kotlin.random.Random
-import kotlinx.coroutines.*
-import io.ktor.client.plugins.websocket.*
-import io.ktor.websocket.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
-
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.Serializable
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 
 class Request {
@@ -32,7 +27,7 @@ class Request {
     /**
      * 服务器IP地址
      */
-    private val baseUrl: String = "10.109.246.210"
+    val baseUrl: String = "10.109.246.210"
 
     // 创建带超时的 HttpClient
     private fun createClient(): HttpClient {
@@ -42,6 +37,8 @@ class Request {
             }
         }
     }
+
+    private var client: HttpClient = HttpClient(CIO)
 
 
     /**
@@ -67,6 +64,67 @@ class Request {
         return Base64.encodeToString(byteArray, Base64.NO_WRAP)
     }
 
+
+    /**
+     * FloatArray转wav
+     */
+    private fun saveFloatArrayAsWav(floatArray: FloatArray, sampleRate: Int, filePath: String) {
+        val byteArray = floatArrayToPCM16(floatArray)
+        val wavHeader = createWavHeader(byteArray.size, sampleRate)
+
+        FileOutputStream(File(filePath)).use { output ->
+            output.write(wavHeader)
+            output.write(byteArray)
+        }
+        println("音频文件已保存到: $filePath")
+    }
+    private fun floatArrayToPCM16(floatArray: FloatArray): ByteArray {
+        val byteBuffer = ByteBuffer.allocate(floatArray.size * 2)
+        byteBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        for (sample in floatArray) {
+            val pcmSample = (sample * Short.MAX_VALUE).toInt().toShort()
+            byteBuffer.putShort(pcmSample)
+        }
+        return byteBuffer.array()
+    }
+    private fun createWavHeader(dataSize: Int, sampleRate: Int): ByteArray {
+        val totalSize = dataSize + 36
+        val byteRate = sampleRate * 2 // 16-bit 单声道
+        return ByteBuffer.allocate(44).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            put("RIFF".toByteArray()) // ChunkID
+            putInt(totalSize) // ChunkSize
+            put("WAVE".toByteArray()) // Format
+            put("fmt ".toByteArray()) // Subchunk1ID
+            putInt(16) // Subchunk1Size (PCM)
+            putShort(1) // AudioFormat (PCM = 1)
+            putShort(1) // NumChannels (单声道)
+            putInt(sampleRate) // SampleRate
+            putInt(byteRate) // ByteRate
+            putShort(2) // BlockAlign
+            putShort(16) // BitsPerSample
+            put("data".toByteArray()) // Subchunk2ID
+            putInt(dataSize) // Subchunk2Size
+        }.array()
+    }
+
+    /**
+     * 清空下载的mp3文件
+     * @param {String} - filePath 文件路径
+     */
+    fun cleanUpAudioFile(filePath: String) {
+        try {
+            val file = File(filePath)
+            if (file.exists()) {
+                file.delete()
+                Log.i("AudioModule", "Cleaned up audio file: $filePath")
+            }
+        } catch (e: Exception) {
+            Log.e("AudioModule", "Error cleaning up file: ${e.message}")
+        }
+    }
+
+
     /**
      * 文本转语音
      * @param {String} - inputText 输入文本内容
@@ -76,28 +134,37 @@ class Request {
      * @return {String} - filePath 文件路径
      */
     suspend fun textToSpeech(inputText: String, context: Context, gender: String = "male", language: String  = "en"): String {
-        val client = createClient()
         try {
+
+            @Serializable
+            data class TextPostData(val input: String, val language: String, val gender: String)
+            @Serializable
+            class SoundResponseData(val code: Int, val result: FloatArray, val process_time: Double)
+            val client = HttpClient(CIO) {
+                install(ContentNegotiation) { json() } // JSON 解析插件
+            }
             val port = 10002
             val url = "http://$baseUrl:$port/text_to_speech"
-            val jsonBody = """{"input": "$inputText", "gender": "$gender", "language": "$language"}"""
+            val textPostData = TextPostData(inputText, language, gender)
 
-            val response: HttpResponse = client.post(url) {
-                contentType(ContentType.Application.Json)
-                setBody(jsonBody)
-            }
+            val response: SoundResponseData = client.post(url) {
+                contentType(ContentType.Application.Json)  // 设置请求内容类型
+                setBody(textPostData)  // 发送 JSON 数据
+            }.body()
             val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
             val filename = "video_${System.currentTimeMillis()}.mp3"
-            val videFile = File(storageDir, filename)
+            val filePath = "$storageDir/$filename"
 
-            videFile.writeBytes(response.bodyAsChannel().toByteArray())
-            return "$storageDir/$filename" // 返回文件路径
+            val sampleRate = 24000
+            saveFloatArrayAsWav(response.result, sampleRate, filePath)
+            Log.e("result", "语音文件存储路径：$filePath")
+            return filePath // 返回文件路径
+
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
             return ""
-        } finally {
-            client.close()
         }
+
     }
 
     /**
@@ -106,7 +173,6 @@ class Request {
      * @return {String} - result 性别识别结果 male / female
      */
     suspend fun genderRecognition(gestureFrames: List<Bitmap>): String {
-        val client = HttpClient(CIO)
         try {
             val port = 10004
             val url = "http://$baseUrl:$port/image_gender"
@@ -132,8 +198,6 @@ class Request {
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
             return ""
-        } finally {
-            client.close()
         }
     }
 
@@ -143,7 +207,6 @@ class Request {
      * @return {String} - result 手势识别结果 fist / none
      */
     suspend fun gestureRecognition(gestureFrames: List<Bitmap>): String {
-        val client = HttpClient(CIO)
         try {
             val port = 18888
             val url = "http://$baseUrl:$port/detect_fist"
@@ -167,8 +230,6 @@ class Request {
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
             return ""
-        } finally {
-            client.close()
         }
     }
 
@@ -201,127 +262,6 @@ class Request {
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
             return ""
-        } finally {
-            client.close()
-        }
-    }
-
-    /**
-     * 流式翻译
-     */
-
-    // 模拟流式数据生成
-    private fun generateData(): Flow<TextMessage> = flow {
-        var msg_id = 0
-        while (true) {
-            emit(TextMessage(msg_id, "这是一个数据--${Random.nextInt(1, 100)}"))
-            msg_id++
-            delay(10000) // 每秒生成一个数据
-        }
-    }
-
-    // 发送数据
-    private suspend fun sendData(session: DefaultClientWebSocketSession) {
-        try {
-            generateData().collect { data ->
-                val json = Json.encodeToString(data)
-                Log.e("websocket", "发送中: $json")
-                session.send(json)
-            }
-        } catch (e: Exception) {
-            Log.e("websocket", "发送数据时出错: ${e.message}")
-        }
-    }
-
-    // 接收数据
-    private suspend fun receiveData(session: DefaultClientWebSocketSession) {
-        try {
-            for (frame in session.incoming) {
-
-                if (frame is Frame.Text) {
-                    val response = frame.readText()
-                    try {
-                        val data = Json.decodeFromString<TextMessage>(response)
-                        Log.e("websocket", "收到: msg_id=${data.msg_id}, content=${data.content}")
-                    } catch (e: Exception) {
-                        Log.e("websocket", "收到无效的 JSON 数据: $response")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("websocket", "接收数据时出错: ${e.message}")
-        }
-    }
-
-    // 连接 WebSocket 服务器
-    suspend fun streamData() {
-
-        val client = HttpClient(CIO) {
-            install(WebSockets)
-        }
-
-        try {
-            val port = 8765
-            client.webSocket("ws://$baseUrl:$port") {
-                Log.e("websocket", "已连接到 WebSocket 服务器！")
-
-                // 发送注册消息
-                val registerMsg = RegisterMessage("client_001", "APP", "LeiNiao")
-                send(Json.encodeToString(registerMsg))
-                Log.e("websocket", "已发送注册信息：$registerMsg")
-
-                // 启动发送和接收的协程
-                coroutineScope {
-                    launch { sendData(this@webSocket) }
-                    launch { receiveData(this@webSocket) }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("websocket", "连接错误: ${e.message}")
-        } finally {
-            client.close()
-        }
-    }
-
-    /**
-     * 上行情况测试
-     */
-    suspend fun testUpSpeed(size: Int): Long {
-        val client = createClient()
-        try {
-            val port = 10005
-            val url = "http://$baseUrl:$port/test_speed"
-
-            // 手动构造请求的 JSON 字符串
-            val jsonRequestBody = """{"type": "test_up","size": $size}"""
-
-
-
-            val startTime = System.nanoTime()
-
-            val response: HttpResponse = client.post(url) {
-                contentType(ContentType.Application.Json) // 设置请求内容类型
-                setBody(jsonRequestBody) // 发送 JSON 字符串
-            }
-
-            // 获取响应文本并手动解析 JSON
-//            val responseText = response.bodyAsText()
-//
-//            val jsonResponse = JSONObject(responseText)
-//            val receiveTime = jsonResponse.getString("receive_time").toLong() // 提取 "receive_time" 字段
-//            val serverTimestamp = jsonResponse.getString("server_timestamp").toLong() // 提取 "server_timestamp" 字段
-//
-//            val timeOffset = serverTimestamp - startTime // 计算服务器时间和本地时间的差异
-//            val adjustedReceiveTime = receiveTime + timeOffset // 校正 receive_time
-
-            val endTime = System.nanoTime()
-            val elapsedTimeMs = (endTime - startTime) / 1_000_000 // 转换为毫秒
-
-            return elapsedTimeMs
-
-        } catch (e: Exception) {
-            Log.e("Error", "错误: ${e.localizedMessage}")
-            return 0
         } finally {
             client.close()
         }

@@ -94,7 +94,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         appController.setTranslationCallback { result ->
-            runOnUiThread { translationResultText.text = result }
+            if (result == "<|STX|>") {
+               // 开始字符，清空屏幕
+                runOnUiThread {
+                    translationResultText.text = ""
+                }
+            } else {
+                // 翻译结果
+                runOnUiThread {
+                    translationResultText.append(result)
+                }
+            }
+
         }
 
         appController.setGestureCallback { gesture ->
