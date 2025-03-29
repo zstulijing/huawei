@@ -1,7 +1,13 @@
-package com.k2fsa.sherpa.ncnn
+package com.k2fsa.sherpa.ncnn.recorder
 
 import android.content.res.AssetManager
 import android.util.Log
+import com.k2fsa.sherpa.ncnn.RecognizerConfig
+import com.k2fsa.sherpa.ncnn.SherpaNcnn
+//import com.k2fsa.sherpa.ncnn.TAG
+import com.k2fsa.sherpa.ncnn.getDecoderConfig
+import com.k2fsa.sherpa.ncnn.getFeatureExtractorConfig
+import com.k2fsa.sherpa.ncnn.getModelConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -9,14 +15,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-private const val TAG = "SpeechRecognizer"
-
 class SpeechRecognizer(
     private val assetManager: AssetManager,
     private val useGPU: Boolean = true,
     private val modelType: Int = 2 // Default to bilingual model
 ) {
-
+    private val TAG = "SpeechRecognizer"
     private lateinit var model: SherpaNcnn
     private var lastText: String = ""
     private var utteranceIndex: Int = 0

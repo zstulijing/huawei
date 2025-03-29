@@ -2,10 +2,9 @@ package com.k2fsa.sherpa.ncnn.control
 
 import android.graphics.Bitmap
 import android.util.Log
-import android.view.translation.TranslationManager
 import com.k2fsa.sherpa.ncnn.Gender
 import com.k2fsa.sherpa.ncnn.GenderDetector
-import com.k2fsa.sherpa.ncnn.SpeechRecognizer
+import com.k2fsa.sherpa.ncnn.recorder.SpeechRecognizer
 import com.k2fsa.sherpa.ncnn.gesture.GestureDetector
 import com.k2fsa.sherpa.ncnn.request.Request
 import com.k2fsa.sherpa.ncnn.translation.LlmTranslator
@@ -46,8 +45,8 @@ class UnloadController(private var outVector: IntArray) {
                 }
             }
             1 -> {
-                // 服务器端执行（待实现）
-                "服务器端语音转文本尚未实现"
+                // 服务器端执行，返回特殊字符，用于逻辑控制
+                "<|WS|>"
             }
             else -> {
                 ""
@@ -59,7 +58,7 @@ class UnloadController(private var outVector: IntArray) {
     /**
      * 中英互译
      */
-    suspend fun translate(result: String, translationManager: LlmTranslator, callback: suspend () -> Unit) {
+    suspend fun translate(result: String, translationManager: LlmTranslator, callback: suspend () -> Unit): String {
         if (outVector[1] == 0) { // 在安卓端执行
 
             val startTime = System.currentTimeMillis() // 单位：毫秒
@@ -71,10 +70,13 @@ class UnloadController(private var outVector: IntArray) {
             // 计算经过时间（单位：毫秒）
             val elapsedTime = endTime - startTime
             Log.e("xxx", "端测中英互译：结果: $translatedResult, 经过时间：$elapsedTime ms")
+            return translatedResult
 
         } else if (outVector[1] == 1) { // 在服务器端执行
             callback()
+            return ""
         }
+        return ""
     }
 
 

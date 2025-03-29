@@ -8,8 +8,8 @@ import com.k2fsa.sherpa.ncnn.GenderDetector
 import com.k2fsa.sherpa.ncnn.gesture.GestureDetector
 //import com.k2fsa.sherpa.ncnn.translation.TranslationManager
 import com.k2fsa.sherpa.ncnn.translation.LlmTranslator
-import com.k2fsa.sherpa.ncnn.AudioRecorder
-import com.k2fsa.sherpa.ncnn.SpeechRecognizer
+import com.k2fsa.sherpa.ncnn.recorder.AudioRecorder
+import com.k2fsa.sherpa.ncnn.recorder.SpeechRecognizer
 import com.k2fsa.sherpa.ncnn.video.CameraManager
 import com.k2fsa.sherpa.ncnn.video.VideoFrameProcessor
 import com.k2fsa.sherpa.ncnn.utils.Logger
@@ -19,6 +19,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.k2fsa.sherpa.ncnn.algorithm.Algorithm
+import com.k2fsa.sherpa.ncnn.recorder.calculateRMS
+import com.k2fsa.sherpa.ncnn.request.AudioMessage
+import com.k2fsa.sherpa.ncnn.request.AudioResponseMessage
 import com.k2fsa.sherpa.ncnn.request.Request
 import com.k2fsa.sherpa.ncnn.request.TextMessage
 import com.k2fsa.sherpa.ncnn.request.RegisterMessage
@@ -31,6 +34,11 @@ import io.ktor.websocket.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import com.k2fsa.sherpa.ncnn.status.StatusMonitor
+import com.k2fsa.sherpa.ncnn.translation.isChinese
+import com.k2fsa.sherpa.ncnn.translation.isEnglish
+import com.k2fsa.sherpa.ncnn.translation.tokenizeChinese
+import com.k2fsa.sherpa.ncnn.translation.tokenizeEnglish
+import com.k2fsa.sherpa.onnx.KokoroTTS
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
@@ -40,7 +48,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.channels.Channel
 
 
 /**
@@ -51,6 +58,20 @@ import kotlinx.coroutines.channels.Channel
  * 查看websocket - tag:websocket
  */
 class AppController private constructor() {
+
+
+    /**
+     * 卸载算法输出
+     * [0]: 语音转文本
+     * [1]: 中英互译
+     * [2]: 文本转语音
+     * [3]: 图像识别男女
+     * [4]: 图像识别手势
+     */
+    private var outVector = intArrayOf(0, 0, 1, 1, 0)
+    private var trans = true
+
+
     private val logger = Logger(this::class.java.simpleName)
     private val eventBus = EventBus()
     private val mainScope = CoroutineScope(Dispatchers.Main)
@@ -63,21 +84,21 @@ class AppController private constructor() {
     private lateinit var videoFrameProcessor: VideoFrameProcessor
     private lateinit var gestureDetector: GestureDetector
     private lateinit var genderDetector: GenderDetector
+
     // 扬声器
     private lateinit var audioPlayer: AudioPlayer
-//    private lateinit var translationManager: TranslationManager
+
     // 卸载算法
     private lateinit var algorithm: Algorithm
     // 控制逻辑
     private lateinit var unloadController: UnloadController
 
-//    private lateinit var translationManager: LlmTranslator
+    // 翻译器
     private lateinit var translationManager: LlmTranslator
 
     // Callbacks
     private var recognitionCallback: ((String) -> Unit)? = null
     private var translationCallback: ((String) -> Unit)? = null
-
     private var gestureCallback: ((GestureDetector.GestureType) -> Unit)? = null
     private var genderCallback: ((Gender) -> Unit)? = null
     private var statusCallback: ((String) -> Unit)? = null
@@ -94,34 +115,35 @@ class AppController private constructor() {
     // 功耗检测
     private lateinit var statusMonitor: StatusMonitor
 
+
+
     // request请求类
     private var request = Request()
     // websocket
-    private lateinit var webSocketSession: DefaultClientWebSocketSession
+    private lateinit var translateWebSocketSession: DefaultClientWebSocketSession
+    private lateinit var soundToTextWebSocketSession: DefaultClientWebSocketSession
+
     private var webSocketClient: HttpClient = HttpClient(CIO) {
         install(WebSockets)
     }
     private val _textResultFlow = MutableSharedFlow<String>()
     private val textResultFlow = _textResultFlow.asSharedFlow()
 
+    private val _soundResultFlow = MutableSharedFlow<FloatArray>()
+    private val soundResultFlow = _soundResultFlow.asSharedFlow()
 
     // 性别
     private var paramGender = "male"
-    /**
-     * 卸载算法输出
-     * [0]: 语音转文本，一定是0（安卓端）
-     * [1]: 中英互译
-     * [2]: 文本转语音
-     * [3]: 图像识别男女
-     * [4]: 图像识别手势
-     */
-    private var outVector = intArrayOf(0, 1, 1, 0, 0)
+
 
     // 中英互译的流控制
     private var messageId: Int = 0
     private var isStart = true
     private var translatedText: TranslatedText = TranslatedText("", messageId, "")
     private var flowStartTime: Long = 0L
+
+    // 文本转语音
+    private lateinit var kokoroTTS: KokoroTTS
 
 
     /**
@@ -147,9 +169,9 @@ class AppController private constructor() {
 
         // Initialize Speaker modules
         audioPlayer = AudioPlayer()
-        audioScope.launch {
-            processTextToSpeechQueue()
-        }
+
+
+        kokoroTTS = KokoroTTS(activity.baseContext)
 
         algorithm = Algorithm()
         // 初始化卸载向量
@@ -182,7 +204,7 @@ class AppController private constructor() {
     private val audioJob = Job() // 创建一个 Job 用于控制协程
     private val audioScope = CoroutineScope(Dispatchers.IO + audioJob)
     private val audioMutex = Mutex()
-    private val textChannel = Channel<TranslatedText>(capacity = Channel.UNLIMITED) // 任务队列
+
     private fun setupEventListeners() {
         // Handle speech recognition results
         eventBus.subscribe(EventBus.Event.SPEECH_RESULT) { data ->
@@ -209,7 +231,30 @@ class AppController private constructor() {
 
             val translatedTextTemp = data as TranslatedText
             audioScope.launch {
-                textChannel.send(translatedTextTemp) // 将事件放入队列
+                val text = translatedText.text
+                val language = translatedText.language
+                val id = translatedText.id
+                translatedText.clear() // 清空临时数据
+                try {
+                    if (outVector[2] == 0) {
+                        audioMutex.withLock {
+                            kokoroTTS.speak(text)
+                        }
+                    } else if (outVector[2] == 1) {
+                        // 生成音频文件
+                        val filePath = request.textToSpeech(text, context, paramGender, language)
+                        if (filePath.isNotEmpty()) {
+                            // 使用互斥锁确保播放顺序
+                            audioMutex.withLock {
+                                audioPlayer.playAudio(filePath)
+                                request.cleanUpAudioFile(filePath) // 清理文件
+                            }
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    Log.e("AudioModule", "Error processing audio: ${e.message}")
+                }
             }
 
         }
@@ -248,151 +293,60 @@ class AppController private constructor() {
 
         // 测试输出向量
 //        Log.e("vector", outVector.joinToString())
+        var interval = 0.1 // 本地文本转语音 默认间隔100ms
+        if (outVector[0] == 1) {
+            // 端侧文本转语音 -> 中英互译 -> 设置间隔为400ms
+            interval = 0.4
+        }
+        audioRecorder.startRecording(interval) { samples ->
 
-        audioRecorder.startRecording{ samples ->
+
             recordScope.launch {
                 // 先进行语音转文本
                 val soundToTextResult: String = unloadController.soundToText(speechRecognizer, eventBus, request, samples)
-                Log.e("result", soundToTextResult)
-                if (soundToTextResult != "") {
 
-                    unloadController.translate(soundToTextResult, translationManager) {
-                        _textResultFlow.emit(soundToTextResult) // 发送 textResult 到流
+                if (soundToTextResult == "<|WS|>") { // 特殊控制字符，边测文本转语音+中英互译
+                    // 计算样本的 RMS（均方根）值
+                    val rms = calculateRMS(samples)
+                    val silenceThreshold = 0.01f // 示例阈值，假设样本值范围是 [-1.0, 1.0]
+                    // 判断是否为空语音
+                    if (rms < silenceThreshold) {
+                        // 空语音
+                        _soundResultFlow.emit(FloatArray(0)) // 发送空数组到流，同时指定id = -1（断句标识）
+                    } else {
+                        // 非空语音
+                        _soundResultFlow.emit(samples) // 发送 samples (FloatArray) 到流
                     }
 
+                } else if (soundToTextResult != "") { // 本地文本转语音，且转出来的值不是空
+                    val localResultText = unloadController.translate(soundToTextResult, translationManager) {
+                        // 服务端执行
+                        _textResultFlow.emit(soundToTextResult) // 发送 soundToTextResult (String) 到流
+                    }
+                    if (localResultText != "") {
+                        // 本地非流式输出
+                        eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
+                        translatedText.text = localResultText
+                        translatedText.id = -1
+                        if (isChinese(localResultText)) {
+                            translatedText.language = "zh"
+                            val tokens = tokenizeChinese(localResultText)
+                            tokens.forEach {
+                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
+                                delay(50)
+                            }
+                        } else {
+                            translatedText.language = "en"
+                            val tokens = tokenizeEnglish(localResultText)
+                            tokens.forEach {
+                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
+                                delay(50)
+                            }
+                        }
+                        eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
+                    }
                 }
-
-
-
-//                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedResult)
-
-
-
-
             }
-
-
-//            val startRecordTime = System.currentTimeMillis() // 单位：毫秒
-//
-//            speechRecognizer.recognize(samples) { result ->
-//
-//                val endRecordTime = System.currentTimeMillis() // 单位：毫秒
-//                Log.e("xxx", "端侧语音转文本：结果：$result, 经过时间: ${endRecordTime - startRecordTime} ms")
-//
-//                /**
-//                 * {string} - result 语言转的文本
-//                 */
-//                eventBus.publish(EventBus.Event.SPEECH_RESULT, result)
-//
-//                /**
-//                 * 中英互译
-//                 */
-//                var translatedText = ""
-//                if (outVector[1] == 0) {
-//                    // 安卓端执行
-//
-//                    // 记录请求开始时间
-//                    val startTime = System.currentTimeMillis() // 单位：毫秒
-//
-//                    val translator = LlmTranslator
-//                    CoroutineScope(Dispatchers.Main).launch {
-//                        translatedText = translator.translate(result)
-//                        // 记录请求结束时间
-//                        val endTime = System.currentTimeMillis()
-//
-//                        // 计算经过时间（单位：毫秒）
-//                        val elapsedTime = endTime - startTime
-//                        Log.e("xxx", "端测中英互译：结果: $translatedText, 经过时间：$elapsedTime ms")
-//
-//
-//                        eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedText)
-//
-//
-//                        /**
-//                         * 文本转语音
-//                         */
-//                        if (outVector[2] == 0) {
-//                            // 安卓端执行
-//                            Log.e("" , "端测文本转语音")
-//                        } else if (outVector[2] == 1) {
-//                            // 服务器端执行
-//
-//                            // 记录请求开始时间
-//                            val startTime2 = System.currentTimeMillis() // 单位：毫秒
-//
-//                            val filePath: String = request.textToSpeech(translatedText, context, paramGender)
-//
-//                            // 记录请求结束时间
-//                            val endTime2 = System.currentTimeMillis()
-//
-//                            // 计算经过时间（单位：毫秒）
-//                            val elapsedTime2 = endTime2 - startTime2
-//
-//                            // 打印结果和经过时间
-//                            Log.e("xxx", "边测文本转语音：文字: $translatedText, 存储路径：$filePath, 经过时间: $elapsedTime2 ms")
-//
-//                            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedText)
-//
-//                        }
-//
-//                    }
-//
-//
-//
-//
-//                } else if (outVector[1] == 1) {
-//                    // 服务器端执行
-//                    scope.launch {
-//                        // 记录请求开始时间
-//                        val startTime = System.currentTimeMillis() // 单位：毫秒
-//
-//                        translatedText = request.translate(result)
-//
-//                        // 记录请求结束时间
-//                        val endTime = System.currentTimeMillis()
-//
-//                        // 计算经过时间（单位：毫秒）
-//                        val elapsedTime = endTime - startTime
-//
-//                        // 打印结果和经过时间
-//                        Log.e("xxx", "边测中英互译：结果: $translatedText, 经过时间: $elapsedTime ms")
-//
-//
-//                        eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedText)
-//
-//                        /**
-//                         * 文本转语音
-//                         */
-//                        if (outVector[2] == 0) {
-//                            // 安卓端执行
-//                            Log.e("" , "端测文本转语音")
-//                        } else if (outVector[2] == 1) {
-//                            // 服务器端执行
-//
-//                            // 记录请求开始时间
-//                            val startTime2 = System.currentTimeMillis() // 单位：毫秒
-//
-//                            val filePath: String = request.textToSpeech(translatedText, context, paramGender)
-//
-//                            // 记录请求结束时间
-//                            val endTime2 = System.currentTimeMillis()
-//
-//                            // 计算经过时间（单位：毫秒）
-//                            val elapsedTime2 = endTime2 - startTime2
-//
-//                            // 打印结果和经过时间
-//                            Log.e("xxx", "边测文本转语音：文字: $translatedText, 存储路径：$filePath, 经过时间: $elapsedTime2 ms")
-//
-//                            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedText)
-//
-//                        }
-//                    }
-//
-//                }
-//
-//
-//            }
-
         }
     }
 
@@ -418,6 +372,7 @@ class AppController private constructor() {
     /**
      * 挂载生命周期
      */
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     fun onResume() {
         checkInitialization()
         // Start periodic video capture for gesture and gender detection
@@ -428,8 +383,11 @@ class AppController private constructor() {
         statusMonitor.startMemoryMonitoring()
 
         // websocket建立连接
-        CoroutineScope(Dispatchers.IO).launch {
-            initWebSocket()
+        coroutineScope.launch {
+            initTranslateWebSocket()
+        }
+        coroutineScope.launch {
+            initSoundToTextWebSocket()
         }
     }
 
@@ -464,6 +422,7 @@ class AppController private constructor() {
         videoFrameProcessor.shutdown()
         gestureDetector.close()
         genderDetector.close()
+        kokoroTTS.destroy()
 
         statusMonitor.unregisterBatteryReceiver()
         statusMonitor.stopPowerMonitoring()
@@ -472,8 +431,9 @@ class AppController private constructor() {
         // 清理协程
         cameraJob.cancel()
         recordScope.cancel()
-        // 关闭通道
-        textChannel.close()
+
+        coroutineScope.cancel() // 取消所有协程
+        webSocketClient.close() // 关闭 WebSocket 客户端
 
     }
 
@@ -559,69 +519,62 @@ class AppController private constructor() {
     }
 
 
-    /**
-     * 扬声器控制
-     */
-    private suspend fun processTextToSpeechQueue() {
-        for (translatedText in textChannel) { // 按顺序接收事件
-            val text = translatedText.text
-            val language = translatedText.language
-            val id = translatedText.id
-            translatedText.clear() // 清空临时数据
-
-            try {
-                // 生成音频文件
-                val filePath = request.textToSpeech(text, context, paramGender, language)
-                if (filePath.isNotEmpty()) {
-                    // 使用互斥锁确保播放顺序
-                    audioMutex.withLock {
-                        audioPlayer.playAudio(filePath) {
-                            Log.e("speaker", "播放成功")
-                            request.cleanUpAudioFile(filePath) // 清理文件
-                        }
-                    }
-                }
-            } catch (e: OutOfMemoryError) {
-                Log.e("AudioModule", "Out of memory during TTS: ${e.message}")
-            } catch (e: Exception) {
-                Log.e("AudioModule", "Error processing audio: ${e.message}")
-            }
-        }
-    }
 
 
     /**
      * websocket逻辑，为了方便集成到AppController
      */
-    private suspend fun initWebSocket() {
+    private suspend fun initTranslateWebSocket() {
         try {
             val port = 8765
             webSocketClient.webSocket("ws://${request.baseUrl}:$port") {
-                webSocketSession = this
-                Log.e("websocket", "已连接到 WebSocket 服务器！")
+                translateWebSocketSession = this
+                Log.e("websocket", "已连接到翻译 WebSocket 服务器 (8765)！")
                 // 注册逻辑保持不变
                 val registerMsg = RegisterMessage("client_001", "APP", "LeiNiao")
                 send(Json.encodeToString(registerMsg))
                 Log.e("websocket", "已发送注册信息：$registerMsg")
 
                 coroutineScope {
-                    launch { sendData(this@webSocket) }
-                    launch { receiveData(this@webSocket) }
+                    launch { sendTranslateData(this@webSocket) }
+                    launch { receiveTranslateData(this@webSocket) }
                 }
             }
         } catch (e: Exception) {
             Log.e("websocket", "连接错误: ${e.message}")
         }
     }
-    // 数据生成
-    private fun generateData(textResult: String, msgId: Int): Flow<TextMessage> = flow {
+
+    private suspend fun initSoundToTextWebSocket() {
+        try {
+            val port = 10003
+            webSocketClient.webSocket("ws://${request.baseUrl}:$port") {
+                soundToTextWebSocketSession = this
+                Log.e("websocket", "已连接到语音转文本 WebSocket 服务器 (10003)！")
+                // 注册逻辑保持不变
+                val registerMsg = RegisterMessage("client_001", "APP", "LeiNiao")
+                send(Json.encodeToString(registerMsg))
+                Log.e("websocket", "已发送注册信息：$registerMsg")
+                // 10003 只需要发不需要收
+                coroutineScope {
+                    launch { sendSoundToTextData(this@webSocket) }
+                    launch { receiveSoundData(this@webSocket) }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("websocket", "连接错误: ${e.message}")
+        }
+    }
+
+    // 翻译数据生成
+    private fun generateTranslateData(textResult: String, msgId: Int): Flow<TextMessage> = flow {
         emit(TextMessage(msgId, textResult))
     }
-    // 发送数据
-    private suspend fun sendData(session: DefaultClientWebSocketSession) {
+    // 发送翻译数据
+    private suspend fun sendTranslateData(session: DefaultClientWebSocketSession) {
         try {
             textResultFlow.collect { textResult ->
-                generateData(textResult, messageId).collect { data ->
+                generateTranslateData(textResult, messageId).collect { data ->
                     val json = Json.encodeToString(data)
                     Log.e("websocket", "发送中: $json")
                     session.send(json)
@@ -631,11 +584,11 @@ class AppController private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "发送数据时出错: ${e.message}")
+            Log.e("websocket", "发送翻译数据时出错: ${e.message}")
         }
     }
-    // 接收数据
-    private suspend fun receiveData(session: DefaultClientWebSocketSession) {
+    // 接收翻译数据
+    private suspend fun receiveTranslateData(session: DefaultClientWebSocketSession) {
         try {
             for (frame in session.incoming) {
 
@@ -643,7 +596,7 @@ class AppController private constructor() {
                     val response = frame.readText()
                     try {
                         val data = Json.decodeFromString<TextMessage>(response)
-                        Log.e("websocket", "收到: msg_id=${data.msg_id}, content=${data.content}")
+                        Log.e("websocket", "8765收到: msg_id=${data.msg_id}, content=${data.content}")
                         if (data.content == "<|EN|>") {
                             isStart = true
                             translatedText.language = "en"
@@ -674,7 +627,70 @@ class AppController private constructor() {
         }
     }
 
+    // 语音数据生成
+    private fun generateSoundData(id: String, msgId: Int, samples: FloatArray, trans: Boolean, sampleRate: Int): Flow<AudioMessage> = flow {
+        emit(AudioMessage(id, msgId, samples, trans, sampleRate))
+    }
+    // 发送语音数据
+    private suspend fun sendSoundToTextData(session: DefaultClientWebSocketSession) {
+        try {
+            soundResultFlow.collect { soundResult ->
+                generateSoundData("client_001", messageId, soundResult, trans, 16000).collect { data ->
+                    if (soundResult.isEmpty()) {
+                        data.msg_id = -1
+                    }
+                    val json = Json.encodeToString(data)
+                    Log.e("websocket", "发送中: $json")
+                    session.send(json)
+                    translatedText.id = messageId
+                    if (soundResult.isNotEmpty()) {
+                        messageId++
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("websocket", "发送语音数据时出错: ${e.message}")
+        }
+    }
+    // 接收语音数据：语音转文本结果 或 翻译结果（whisper）
+    private suspend fun receiveSoundData(session: DefaultClientWebSocketSession) {
+        try {
+            for (frame in session.incoming) {
+                if (frame is Frame.Text) {
+                    val response = frame.readText()
+                    try {
+                        val data = Json.decodeFromString<AudioResponseMessage>(response)
+                        Log.e("websocket", "10003收到: msg_id=${data.msg_id}, content=${data.content}")
+                        // 服务器非流式输出
+                        eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
+                        translatedText.text = data.content
+                        translatedText.id = -1
+                        if (isChinese(data.content)) {
+                            translatedText.language = "zh"
+                            val tokens = tokenizeChinese(data.content)
+                            tokens.forEach {
+                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
+                                delay(50)
+                            }
+                        } else {
+                            translatedText.language = "en"
+                            val tokens = tokenizeEnglish(data.content)
+                            tokens.forEach {
+                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
+                                delay(50)
+                            }
+                        }
+                        eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
 
+                    } catch (e: Exception) {
+                        Log.e("websocket", "收到无效的 JSON 数据: $response")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("websocket", "接收数据时出错: ${e.message}")
+        }
+    }
 
     fun setRecognitionCallback(callback: (String) -> Unit) {
         recognitionCallback = callback

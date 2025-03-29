@@ -1,4 +1,4 @@
-package com.k2fsa.sherpa.ncnn
+package com.k2fsa.sherpa.ncnn.recorder
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -8,13 +8,12 @@ import android.media.MediaRecorder
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+//import com.k2fsa.sherpa.ncnn.TAG
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-
-private const val TAG = "AudioRecorder"
-
 class AudioRecorder(private val activity: AppCompatActivity) {
+    private val TAG = "AudioRecorder"
 
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
@@ -71,7 +70,7 @@ class AudioRecorder(private val activity: AppCompatActivity) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun startRecording(recordingCallback: ((FloatArray) -> Unit)?): Boolean {
+    fun startRecording(interval: Double, recordingCallback: ((FloatArray) -> Unit)?): Boolean {
         if (isRecording.get()) return true
 
         if (!hasPermission()) {
@@ -94,7 +93,7 @@ class AudioRecorder(private val activity: AppCompatActivity) {
             isRecording.set(true)
             recordingThread = thread(start = true) {
                 //处理音频数据
-                val interval = 0.1 // 100ms chunks
+//                val interval = 0.1 // 100ms chunks
                 val samplesPerInterval = (interval * sampleRateInHz).toInt()
                 val buffer = ShortArray(samplesPerInterval)
 
