@@ -1,5 +1,14 @@
 package com.k2fsa.sherpa.ncnn.algorithm
 
+/**
+ * 卸载算法输出
+ * [0]: 语音转文本
+ * [1]: 中英互译
+ * [2]: 文本转语音
+ * [3]: 图像识别男女
+ * [4]: 图像识别手势
+ */
+
 class Algorithm {
 
     /**
@@ -72,6 +81,7 @@ class Algorithm {
         }
         return deployment
     }
+
     fun outputVector(): IntArray {
         // 获取固定延迟数据
         val (localDelays, cloudDelays, uploadDelays, downloadDelays) = getModuleDelays()
@@ -95,4 +105,19 @@ class Algorithm {
         return deployment.toIntArray()
     }
 
+    fun setPathOne(): IntArray {
+        return intArrayOf(0, 0, 1, 0, 0)
+    }
+    fun setPathTwo(): IntArray {
+        return intArrayOf(0, 1, 1, 0, 0)
+    }
+    fun setPathThree(): IntArray {
+        return intArrayOf(1, 1, 1, 0, 0)
+    }
+    fun setPathFour(): IntArray {
+        return intArrayOf(0, 0, 0, 0, 0)
+    }
+    fun setPathFive(): IntArray {
+        return intArrayOf(1, 1, 1, 0, 0)
+    }
 }

@@ -6,9 +6,15 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 private const val TAG = "KokoroTTS"
 
@@ -121,27 +127,39 @@ public class KokoroTTS(private val context: Context) {
     /**
      * 文本转语音接口
      * @param text 输入的文本，默认为使用 speakerId=0, speed=1.0
+     * speakerId 0 ... 58 female
+     * speakerId >= 58 male
      */
-    suspend fun speak(text: String, speakerId: Int = 8, speed: Float = 1.0f) {
+    suspend fun speak(text: String, speakerId: Int, speed: Float = 1.0f) = withContext(Dispatchers.Default) {
         if (text.isBlank()) {
             Log.e(TAG, "输入文本为空")
-            return
+            return@withContext
         }
+
         stopped = false
-        // 准备 AudioTrack 播放：暂停、清空缓冲区后重新播放
         track.pause()
         track.flush()
         track.play()
 
-        // 开启子线程进行 TTS 生成，并通过回调实时写入 AudioTrack 播放
-        Thread {
+        try {
             tts.generateWithCallback(
                 text = text,
                 sid = speakerId,
                 speed = speed,
-                callback = this::callback
+                callback = { samples ->
+                    if (!stopped) {
+                        track.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+                        1
+                    } else {
+                        track.stop()
+                        0
+                    }
+                }
             )
-        }.start()
+        } catch (e: Exception) {
+            Log.e(TAG, "TTS 生成失败: $e")
+            stop()
+        }
     }
 
     /**

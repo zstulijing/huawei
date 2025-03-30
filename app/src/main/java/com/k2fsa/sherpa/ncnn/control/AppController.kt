@@ -6,7 +6,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.k2fsa.sherpa.ncnn.Gender
 import com.k2fsa.sherpa.ncnn.GenderDetector
 import com.k2fsa.sherpa.ncnn.gesture.GestureDetector
-//import com.k2fsa.sherpa.ncnn.translation.TranslationManager
 import com.k2fsa.sherpa.ncnn.translation.LlmTranslator
 import com.k2fsa.sherpa.ncnn.recorder.AudioRecorder
 import com.k2fsa.sherpa.ncnn.recorder.SpeechRecognizer
@@ -35,7 +34,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import com.k2fsa.sherpa.ncnn.status.StatusMonitor
 import com.k2fsa.sherpa.ncnn.translation.isChinese
-import com.k2fsa.sherpa.ncnn.translation.isEnglish
 import com.k2fsa.sherpa.ncnn.translation.tokenizeChinese
 import com.k2fsa.sherpa.ncnn.translation.tokenizeEnglish
 import com.k2fsa.sherpa.onnx.KokoroTTS
@@ -52,10 +50,11 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * 查看网络时延 - tag:latency
- * 查看电量/CPU/内存 - tag:usage
- * 查看控制逻辑 - tag:control
+ * 查看电量/CPU/内存/温度 - tag:usage
+ * 查看控制逻辑 - tag:controller
  * 查看模块结果 - tag:result
  * 查看websocket - tag:websocket
+ * 各种异常 - tag:exception
  */
 class AppController private constructor() {
 
@@ -68,16 +67,14 @@ class AppController private constructor() {
      * [3]: 图像识别男女
      * [4]: 图像识别手势
      */
-    private var outVector = intArrayOf(0, 0, 1, 1, 0)
-    private var trans = true
-
-
-    private val logger = Logger(this::class.java.simpleName)
-    private val eventBus = EventBus()
-    private val mainScope = CoroutineScope(Dispatchers.Main)
+    private var outVector = intArrayOf(-1, -1, -1, -1, 0)
+    private var trans = false
 
 
     // Modules
+    private val logger = Logger(this::class.java.simpleName)
+    private val eventBus = EventBus()
+    private val mainScope = CoroutineScope(Dispatchers.Main)
     private lateinit var audioRecorder: AudioRecorder
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var cameraManager: CameraManager
@@ -102,6 +99,7 @@ class AppController private constructor() {
     private var gestureCallback: ((GestureDetector.GestureType) -> Unit)? = null
     private var genderCallback: ((Gender) -> Unit)? = null
     private var statusCallback: ((String) -> Unit)? = null
+    private var usageCallback: ((String) -> Unit)? = null
 
     // State management
     private var isRecording = false
@@ -115,26 +113,22 @@ class AppController private constructor() {
     // 功耗检测
     private lateinit var statusMonitor: StatusMonitor
 
-
-
     // request请求类
     private var request = Request()
+
     // websocket
     private lateinit var translateWebSocketSession: DefaultClientWebSocketSession
     private lateinit var soundToTextWebSocketSession: DefaultClientWebSocketSession
-
     private var webSocketClient: HttpClient = HttpClient(CIO) {
         install(WebSockets)
     }
     private val _textResultFlow = MutableSharedFlow<String>()
     private val textResultFlow = _textResultFlow.asSharedFlow()
-
     private val _soundResultFlow = MutableSharedFlow<FloatArray>()
     private val soundResultFlow = _soundResultFlow.asSharedFlow()
 
     // 性别
     private var paramGender = "male"
-
 
     // 中英互译的流控制
     private var messageId: Int = 0
@@ -174,8 +168,31 @@ class AppController private constructor() {
         kokoroTTS = KokoroTTS(activity.baseContext)
 
         algorithm = Algorithm()
-        // 初始化卸载向量
+
+        /**
+         * 初始化卸载向量
+         */
 //        outVector = algorithm.outputVector()
+
+        /**
+         * 1、中文1（长音频）
+         * 2、中文2（短音频）
+         * 3、英语1（短音频）
+         * 4、英语4（长音频）
+         */
+        // 设置路径1（需要adb启动服务❗❗❗️）
+//        outVector = algorithm.setPathOne()
+        // 设置路径2
+//        outVector = algorithm.setPathTwo()
+        // 设置路径3
+//        outVector = algorithm.setPathThree()
+//        trans = false
+        // 设置路径4
+//        outVector = algorithm.setPathFour()
+        // 设置路径5
+//        outVector = algorithm.setPathFive()
+//        trans = true
+
 
         // 初始化卸载控制器
         unloadController = UnloadController(outVector)
@@ -184,7 +201,7 @@ class AppController private constructor() {
          * 电源监控相关初始化
          */
         // 初始化监控器
-        statusMonitor = StatusMonitor(mainScope, context)
+        statusMonitor = StatusMonitor(mainScope, context, eventBus)
         // 初始化状态检测接收器
         statusMonitor.registerBatteryReceiver(activity)
 
@@ -210,14 +227,6 @@ class AppController private constructor() {
         eventBus.subscribe(EventBus.Event.SPEECH_RESULT) { data ->
             val recognizedText = data as String
             recognitionCallback?.invoke(recognizedText)
-
-            // Send recognized text for translation
-//            if (recognizedText.isNotEmpty()) {
-//                CoroutineScope(Dispatchers.Main).launch {
-//                    val translatedText = translationManager.translate(recognizedText)
-//                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, translatedText)
-//                }
-//            }
         }
 
         // Handle translation results
@@ -228,17 +237,22 @@ class AppController private constructor() {
 
         // 处理文本转语音
         eventBus.subscribe(EventBus.Event.TEXT_TO_SOUND) { data ->
-
             val translatedTextTemp = data as TranslatedText
+
             audioScope.launch {
                 val text = translatedText.text
                 val language = translatedText.language
                 val id = translatedText.id
                 translatedText.clear() // 清空临时数据
                 try {
+
                     if (outVector[2] == 0) {
                         audioMutex.withLock {
-                            kokoroTTS.speak(text)
+                            if (paramGender == "male") {
+                                kokoroTTS.speak(text, 60)
+                            } else if (paramGender == "female") {
+                                kokoroTTS.speak(text, 0)
+                            }
                         }
                     } else if (outVector[2] == 1) {
                         // 生成音频文件
@@ -253,13 +267,16 @@ class AppController private constructor() {
                     }
 
                 } catch (e: Exception) {
-                    Log.e("AudioModule", "Error processing audio: ${e.message}")
+                    Log.e("exception", "Error processing audio: ${e.message}")
                 }
             }
 
         }
 
-
+        eventBus.subscribe(EventBus.Event.USAGE) { data ->
+        val usage = data as String
+            usageCallback?.invoke(usage)
+        }
 
         // Handle gesture detection results
         eventBus.subscribe(EventBus.Event.GESTURE_DETECTED) { data ->
@@ -282,8 +299,10 @@ class AppController private constructor() {
     private val recordScope = CoroutineScope(Dispatchers.IO + recordJob)
     fun startRecording() {
 
-        Log.e("xxx", "开始识别语音")
+        // 测试输出向量
+//        Log.e("vector", outVector.joinToString())
 
+        Log.e("controller", "开始识别语音")
 
         checkInitialization()
         if (isRecording) return
@@ -291,12 +310,12 @@ class AppController private constructor() {
         isRecording = true
         statusCallback?.invoke("Recording started")
 
-        // 测试输出向量
-//        Log.e("vector", outVector.joinToString())
+
         var interval = 0.1 // 本地文本转语音 默认间隔100ms
         if (outVector[0] == 1) {
             // 端侧文本转语音 -> 中英互译 -> 设置间隔为400ms
-            interval = 0.4
+            interval = 0.4  // 一般环境
+//            interval = 0.5 // 服务器环境
         }
         audioRecorder.startRecording(interval) { samples ->
 
@@ -308,13 +327,17 @@ class AppController private constructor() {
                 if (soundToTextResult == "<|WS|>") { // 特殊控制字符，边测文本转语音+中英互译
                     // 计算样本的 RMS（均方根）值
                     val rms = calculateRMS(samples)
-                    val silenceThreshold = 0.01f // 示例阈值，假设样本值范围是 [-1.0, 1.0]
+                    val silenceThreshold = 0.01f // 一般环境
+//                    val silenceThreshold = 0.08f // 服务器环境
+
                     // 判断是否为空语音
                     if (rms < silenceThreshold) {
                         // 空语音
+//                        Log.e("test", "空音频")
                         _soundResultFlow.emit(FloatArray(0)) // 发送空数组到流，同时指定id = -1（断句标识）
                     } else {
                         // 非空语音
+//                        Log.e("test", "非空")
                         _soundResultFlow.emit(samples) // 发送 samples (FloatArray) 到流
                     }
 
@@ -333,14 +356,14 @@ class AppController private constructor() {
                             val tokens = tokenizeChinese(localResultText)
                             tokens.forEach {
                                 eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
-                                delay(50)
+                                delay(100)
                             }
                         } else {
                             translatedText.language = "en"
                             val tokens = tokenizeEnglish(localResultText)
                             tokens.forEach {
                                 eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
-                                delay(50)
+                                delay(100)
                             }
                         }
                         eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
@@ -381,6 +404,7 @@ class AppController private constructor() {
         // 状态监控
         statusMonitor.startPowerMonitoring()
         statusMonitor.startMemoryMonitoring()
+        statusMonitor.startTempMonitoring()
 
         // websocket建立连接
         coroutineScope.launch {
@@ -422,16 +446,19 @@ class AppController private constructor() {
         videoFrameProcessor.shutdown()
         gestureDetector.close()
         genderDetector.close()
+
+        // 关闭文本转语音模块
         kokoroTTS.destroy()
 
+        // 关闭状态监控
         statusMonitor.unregisterBatteryReceiver()
         statusMonitor.stopPowerMonitoring()
         statusMonitor.stopMemoryMonitoring()
+        statusMonitor.stopTempMonitoring()
 
         // 清理协程
         cameraJob.cancel()
         recordScope.cancel()
-
         coroutineScope.cancel() // 取消所有协程
         webSocketClient.close() // 关闭 WebSocket 客户端
 
@@ -460,7 +487,7 @@ class AppController private constructor() {
         videoCaptureJob = null
     }
 
-    // 每5秒这个函数会被调用一次
+    // 处理摄像头捕获的图像（每5秒这个函数会被调用一次）
     private fun captureAndProcessVideoFrames() {
 
         cameraManager.captureFrames(1) { frames ->
@@ -492,24 +519,24 @@ class AppController private constructor() {
                         // 正在录音，识别男女
                         val gender: String = unloadController.genderRecognition(genderDetector, eventBus, request, frame)
                         paramGender = gender
-                        Log.e("control", "正在录音，识别男女")
+                        Log.e("controller", "正在录音，识别男女")
                         Log.e("result", "识别男女结果$gender")
 
                     } else {
                         // 不需要识别男女
-                        Log.e("control", "还没开始录音，不需要识别男女")
+                        Log.e("controller", "还没开始录音，不需要识别男女")
                     }
 
                 } else if (gesture == "fist") {
                     // 识别到fist，此时可能想要结束录音，或想要开始录音
                     if (isRecording) {
                         // 结束录音，不需要识别男女
-                        Log.e("control", "录音结束，不需要识别男女")
+                        Log.e("controller", "录音结束，不需要识别男女")
                     } else {
                         // 开始录音，识别男女
                         val gender: String = unloadController.genderRecognition(genderDetector, eventBus, request, frame)
                         paramGender = gender
-                        Log.e("control", "开始录音，识别男女")
+                        Log.e("controller", "开始录音，识别男女")
                         Log.e("result", "识别男女结果$gender")
                     }
                 }
@@ -517,7 +544,6 @@ class AppController private constructor() {
 
         }
     }
-
 
 
 
@@ -541,7 +567,7 @@ class AppController private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "连接错误: ${e.message}")
+            Log.e("exception", "连接错误: ${e.message}")
         }
     }
 
@@ -562,7 +588,7 @@ class AppController private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "连接错误: ${e.message}")
+            Log.e("exception", "连接错误: ${e.message}")
         }
     }
 
@@ -584,7 +610,7 @@ class AppController private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "发送翻译数据时出错: ${e.message}")
+            Log.e("exception", "发送翻译数据时出错: ${e.message}")
         }
     }
     // 接收翻译数据
@@ -618,12 +644,12 @@ class AppController private constructor() {
                             translatedText.text += data.content
                         }
                     } catch (e: Exception) {
-                        Log.e("websocket", "收到无效的 JSON 数据: $response")
+                        Log.e("exception", "收到无效的 JSON 数据: $response")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "接收数据时出错: ${e.message}")
+            Log.e("exception", "接收数据时出错: ${e.message}")
         }
     }
 
@@ -649,7 +675,7 @@ class AppController private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "发送语音数据时出错: ${e.message}")
+            Log.e("exception", "发送语音数据时出错: ${e.message}")
         }
     }
     // 接收语音数据：语音转文本结果 或 翻译结果（whisper）
@@ -661,34 +687,39 @@ class AppController private constructor() {
                     try {
                         val data = Json.decodeFromString<AudioResponseMessage>(response)
                         Log.e("websocket", "10003收到: msg_id=${data.msg_id}, content=${data.content}")
-                        // 服务器非流式输出
-                        eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
-                        translatedText.text = data.content
-                        translatedText.id = -1
-                        if (isChinese(data.content)) {
-                            translatedText.language = "zh"
-                            val tokens = tokenizeChinese(data.content)
-                            tokens.forEach {
-                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
-                                delay(50)
+                        if (trans) {
+                            // 10003返回的是译文
+                            // 服务器非流式输出
+                            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
+                            translatedText.text = data.content
+                            translatedText.id = -1
+                            if (isChinese(data.content)) {
+                                translatedText.language = "zh"
+                                val tokens = tokenizeChinese(data.content)
+                                tokens.forEach {
+                                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
+                                    delay(50)
+                                }
+                            } else {
+                                translatedText.language = "en"
+                                val tokens = tokenizeEnglish(data.content)
+                                tokens.forEach {
+                                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
+                                    delay(50)
+                                }
                             }
+                            eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
                         } else {
-                            translatedText.language = "en"
-                            val tokens = tokenizeEnglish(data.content)
-                            tokens.forEach {
-                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
-                                delay(50)
-                            }
+                            // 10003返回的是原文
+                            eventBus.publish(EventBus.Event.SPEECH_RESULT, data.content)
                         }
-                        eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
-
                     } catch (e: Exception) {
-                        Log.e("websocket", "收到无效的 JSON 数据: $response")
+                        Log.e("exception", "收到无效的 JSON 数据: $response")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("websocket", "接收数据时出错: ${e.message}")
+            Log.e("exception", "接收数据时出错: ${e.message}")
         }
     }
 
@@ -712,6 +743,9 @@ class AppController private constructor() {
         statusCallback = callback
     }
 
+    fun setUsageCallback(callback: (String) -> Unit) {
+        usageCallback = callback
+    }
     companion object {
         @Volatile
         private var instance: AppController? = null

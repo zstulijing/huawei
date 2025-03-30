@@ -17,12 +17,14 @@ import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.appcompat.app.AppCompatActivity
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.k2fsa.sherpa.ncnn.control.EventBus
+import java.io.BufferedReader
+import java.io.FileReader
+import kotlinx.coroutines.isActive
+import java.io.File
+import java.io.FileNotFoundException
 
-
-class StatusMonitor(private val mainScope: CoroutineScope, private val context: Context) {
+class StatusMonitor(private val mainScope: CoroutineScope, private val context: Context, private val event: EventBus) {
 
     @Volatile // 确保多线程可见性
     private var currentVoltageMilli: Int = -1 // 存储原始电压（毫伏）
@@ -40,6 +42,16 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
     private var lastVoltageUpdateTime = 0L // 最后更新时间戳
     private val voltageListeners = mutableListOf<(Float) -> Unit>() // 监听器列表
     private var batteryReceiverRegistered = false // 接收器状态标记
+
+    private val _cpuTempStats = MutableLiveData<CpuTempStats>()
+    val cpuTempStats: LiveData<CpuTempStats> get() = _cpuTempStats
+    private var tempMonitorJob: Job? = null
+    // 常见温度传感器路径（按优先级排序）
+    private val thermalSensorPaths = listOf(
+        "/sys/devices/virtual/thermal/thermal_zone%d/temp",
+//        "/sys/class/thermal/thermal_zone%d/temp",
+    )
+
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -93,6 +105,132 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
         memoryMonitorJob = null
     }
 
+    fun startTempMonitoring() {
+        stopTempMonitoring()
+
+        tempMonitorJob = mainScope.launch {
+            while (isActive) {
+                collectCpuTemperature()
+                delay(5_000) // 与电量监控保持同步
+            }
+        }
+    }
+    // 停止温度监控
+    fun stopTempMonitoring() {
+        tempMonitorJob?.cancel()
+        tempMonitorJob = null
+    }
+
+    fun checkAndLogSensor(path: String) {
+        val tag = "usage"
+
+        // 记录原始路径检测行为
+        Log.v(tag, "开始检测传感器路径: $path")
+
+        val result = try {
+            val typeFile = File(path.replace("temp", "type"))
+            val typeContent = typeFile.readText()
+
+            // 记录读取到的原始内容
+            Log.d(tag, "读取传感器类型文件内容: $typeContent")
+
+            typeContent.contains("cpu_thermal")
+        } catch (e: FileNotFoundException) {
+            Log.e(tag, "文件不存在: ${e.message}")
+            false
+        } catch (e: SecurityException) {
+            Log.w(tag, "权限拒绝: ${e.message}")
+            false
+        } catch (e: Exception) {
+            Log.e(tag, "检测异常: ${e.stackTraceToString()}")
+            false
+        }
+
+        // 输出最终判断结果
+        if (result) {
+            Log.i(tag, "有效CPU温度传感器路径: $path")
+        } else {
+            Log.w(tag, "非CPU传感器路径: $path")
+        }
+    }
+
+    private fun collectCpuTemperature() {
+        mainScope.launch(Dispatchers.IO) {
+            try {
+                val coreTemps = detectCoreTemperatures()
+                if (coreTemps.isNotEmpty()) {
+                    val maxTemp = coreTemps.values.maxOrNull() ?: 0f
+                    val avgTemp = coreTemps.values.average().toFloat()
+
+                    _cpuTempStats.postValue(
+                        CpuTempStats(
+                            coreTemps = coreTemps,
+                            maxTemp = maxTemp,
+                            avgTemp = avgTemp
+                        )
+                    )
+//                    checkAndLogSensor("/sys/class/thermal/thermal_zone%d/temp")
+                    checkAndLogSensor("/sys/devices/virtual/thermal/thermal_zone%d/temp")
+
+                    logTemperatureStats(coreTemps, maxTemp, avgTemp)
+
+                }
+            } catch (e: Exception) {
+                Log.e("usage", "温度采集失败: ${e.message}")
+            }
+        }
+    }
+
+    private fun detectCoreTemperatures(): Map<Int, Float> {
+        val temps = mutableMapOf<Int, Float>()
+
+        // 尝试所有可能的传感器路径
+        thermalSensorPaths.forEachIndexed { index, pathPattern ->
+            var coreId = 0
+            while (true) {
+                val path = pathPattern.format(coreId)
+                val temp = tryReadTemperature(path)
+                if (temp != null) {
+                    temps[index * 10 + coreId] = temp // 生成唯一核心ID
+                    coreId++
+                } else {
+                    break
+                }
+            }
+            if (temps.isNotEmpty()) return temps
+        }
+
+        return temps
+    }
+
+    private fun tryReadTemperature(path: String): Float? {
+        return try {
+            BufferedReader(FileReader(path)).use { reader ->
+                val tempMilliC = reader.readLine().trim().toFloatOrNull()
+                tempMilliC?.div(1000) // 转换为摄氏度
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun logTemperatureStats(
+        coreTemps: Map<Int, Float>,
+        maxTemp: Float,
+        avgTemp: Float
+    ) {
+        val logMsg = buildString {
+            append("=== CPU温度统计 ===\n")
+            coreTemps.forEach { (core, temp) ->
+                append("核心$core: ${"%.1f℃".format(temp)}\n")
+            }
+            append("最高温度: ${"%.1f℃".format(maxTemp)}\n")
+            append("平均温度: ${"%.1f℃".format(avgTemp)}\n")
+            append("采样时间: ${System.currentTimeMillis()}")
+        }
+//        Log.d("usage", logMsg)
+    }
+
     /**
      * 获取电量状态LiveData（百分比）
      */
@@ -110,7 +248,7 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
             val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
             context.registerReceiver(batteryReceiver, filter)
             batteryReceiverRegistered = true
-            Log.d("BatteryMonitor", "电池广播接收器已注册")
+            Log.d("usage", "电池广播接收器已注册")
         }
     }
 
@@ -136,6 +274,9 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
             Log.d("usage", "当前设备电量: ${currentLevel}%")
             Log.d("usage",
                 "能耗统计 - 当前电流: ${current}A | 当前电压: ${voltage}V | 当前功率: ${power}W")
+
+            event.publish(EventBus.Event.USAGE, "能耗统计 - 当前电流: ${current}A | 当前电压: ${voltage}V | 当前功率: ${power}W")
+
         }
     }
 
@@ -191,7 +332,7 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
     fun addVoltageListener(listener: (Float) -> Unit) {
         if (!voltageListeners.contains(listener)) {
             voltageListeners.add(listener)
-            Log.d("BatteryMonitor", "新增电压监听器，当前总数: ${voltageListeners.size}")
+            Log.d("usage", "新增电压监听器，当前总数: ${voltageListeners.size}")
         }
     }
 
@@ -200,7 +341,7 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
      */
     fun removeVoltageListener(listener: (Float) -> Unit) {
         if (voltageListeners.remove(listener)) {
-            Log.d("BatteryMonitor", "移除电压监听器，剩余数量: ${voltageListeners.size}")
+            Log.d("usage", "移除电压监听器，剩余数量: ${voltageListeners.size}")
         }
     }
 
@@ -213,9 +354,9 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
             try {
                 (context as? AppCompatActivity)?.unregisterReceiver(batteryReceiver)
                 batteryReceiverRegistered = false
-                Log.d("BatteryMonitor", "电池广播接收器已注销")
+                Log.d("usage", "电池广播接收器已注销")
             } catch (e: IllegalArgumentException) {
-                Log.w("BatteryMonitor", "接收器未注册", e)
+                Log.w("usage", "接收器未注册", e)
             }
         }
     }

@@ -16,6 +16,8 @@ class UnloadController(private var outVector: IntArray) {
     /**
      * 设置新的卸载向量
      */
+    private val length = 8
+
     fun setOutVector(newOutVector: IntArray) {
         this.outVector = newOutVector
     }
@@ -34,11 +36,9 @@ class UnloadController(private var outVector: IntArray) {
         return when (outVector[0]) {
             0 -> {
                 // 安卓端执行
-                val startRecordTime = System.currentTimeMillis()
                 suspendCoroutine { continuation ->
                     speechRecognizer.recognize(samples) { result ->
-                        val endRecordTime = System.currentTimeMillis()
-                        Log.e("xxx", "端侧语音转文本：结果：$result, 经过时间: ${endRecordTime - startRecordTime} ms")
+                        Log.e("result", "端侧 语音转文本--结果: $result")
                         eventBus.publish(EventBus.Event.SPEECH_RESULT, result)
                         continuation.resume(result) // 将结果返回给挂起函数
                     }
@@ -69,7 +69,7 @@ class UnloadController(private var outVector: IntArray) {
 
             // 计算经过时间（单位：毫秒）
             val elapsedTime = endTime - startTime
-            Log.e("xxx", "端测中英互译：结果: $translatedResult, 经过时间：$elapsedTime ms")
+            Log.e("result", "端测中英互译：结果: $translatedResult, 经过时间：$elapsedTime ms")
             return translatedResult
 
         } else if (outVector[1] == 1) { // 在服务器端执行
@@ -98,6 +98,7 @@ class UnloadController(private var outVector: IntArray) {
         var result = "none"
 
         if (outVector[4] == 0) { // 在安卓端执行
+
             val startTime = System.currentTimeMillis()
             // 将 detectGesture 的回调转换为挂起函数返回值
 
@@ -106,6 +107,9 @@ class UnloadController(private var outVector: IntArray) {
                     continuation.resume(detectedGesture) // 恢复协程并返回结果
                 }
             }
+            val endTime = System.currentTimeMillis()
+            val elapsedTime = endTime - startTime
+
             // 发布事件并设置 result
             eventBus.publish(EventBus.Event.GESTURE_DETECTED, gesture)
             result = when (gesture) {
@@ -114,9 +118,8 @@ class UnloadController(private var outVector: IntArray) {
                 else -> "none"
             }
 
-            val endTime = System.currentTimeMillis()
-            val elapsedTime = endTime - startTime
-            Log.e("xxx", "端测图像识别姿势---结果：$result, 经过时间：$elapsedTime ms")
+            Log.e("result", "端测 手势识别---结果: $result")
+            Log.e("latency", "端测 手势识别---经过时间: $elapsedTime ms")
 
 
         } else if (outVector[4] == 1) { // 在服务器执行
@@ -139,8 +142,8 @@ class UnloadController(private var outVector: IntArray) {
             }
             eventBus.publish(EventBus.Event.GESTURE_DETECTED, gesture)
 
-            Log.e("xxx", "边测姿势识别---结果: $result, 经过时间：$elapsedTime ms")
-
+            Log.e("result", "边测 手势识别---结果: $result")
+            Log.e("latency", "边测 手势识别---经过时间: $elapsedTime ms")
         }
         return result
     }
@@ -158,25 +161,23 @@ class UnloadController(private var outVector: IntArray) {
         var result = "male"
 
         if (outVector[3] == 0) {
-
+            // 端侧
             val startTime = System.currentTimeMillis()
             val gender = suspendCancellableCoroutine<Gender> { continuation ->
                 genderDetector.detectGender(frame) { detectedGender ->
                     continuation.resume(detectedGender) // 恢复协程并返回性别
                 }
             }
-
-            // 发布事件并设置 result
-//            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
+            val endTime = System.currentTimeMillis()
+            val elapsedTime = endTime - startTime
             result = when (gender) {
                 Gender.MALE -> "male"
                 Gender.FEMALE -> "female"
                 else -> "male" // 默认值
             }
 
-            val endTime = System.currentTimeMillis()
-            val elapsedTime = endTime - startTime
-            Log.e("xxx", "端测图像识别男女：结果: $result, 经过时间: $elapsedTime ms")
+            Log.e("result", "端测 性别识别---结果: $result")
+            Log.e("latency", "端测 性别识别---经过时间: $elapsedTime ms")
 
         } else if (outVector[3] == 1) {
             // 在服务器端执行
@@ -190,18 +191,8 @@ class UnloadController(private var outVector: IntArray) {
 
             result = response
 
-            Log.e("xxx", "边测图像识别男女：结果: $result, 经过时间: $elapsedTime ms")
-
-            // 发布事件
-            var gender = Gender.MALE
-            if (result == "male") {
-                gender = Gender.MALE
-            } else if (result == "female") {
-                gender = Gender.FEMALE
-            } else {
-                gender = Gender.MALE
-            }
-            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, gender)
+            Log.e("result", "边测 性别识别---结果: $result")
+            Log.e("latency", "边测 性别识别---经过时间: $elapsedTime ms")
 
         }
         return result

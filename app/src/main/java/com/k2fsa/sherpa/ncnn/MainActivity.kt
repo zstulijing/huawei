@@ -26,6 +26,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var translationResultText: TextView
     private lateinit var gestureStatusText: TextView
     private lateinit var genderStatusText: TextView
+    private lateinit var usageResultText: TextView
+
     //
     private var isRecording = false
 
@@ -58,7 +60,7 @@ class MainActivity : AppCompatActivity() {
         translationResultText = findViewById(R.id.translationResultText)
         gestureStatusText = findViewById(R.id.gestureStatusText)
         genderStatusText = findViewById(R.id.genderStatusText)
-
+        usageResultText = findViewById(R.id.usageResultText)
         stopButton.isEnabled = false
     }
 
@@ -130,9 +132,15 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { genderStatusText.text = "Detected gender: $gender" }
         }
 
+        appController.setUsageCallback { usage ->
+            runOnUiThread { usageResultText.text = usage }
+        }
+
         appController.setStatusCallback { status ->
             runOnUiThread { statusText.text = status }
         }
+
+
     }
 
     private fun setupListeners() {

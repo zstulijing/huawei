@@ -93,7 +93,7 @@ class SpeechRecognizer(
                         model.reset()
                         if (text.isNotBlank()) {
                             lastText = text
-                            Log.i(TAG, "语音识别结果：$lastText，处理时间：${processingTime}ms")
+                            Log.e("latency", "端侧 语音转文本--经过时间: $processingTime ms")
                             recognitionCallback?.invoke(text)
                             utteranceIndex++
                         }

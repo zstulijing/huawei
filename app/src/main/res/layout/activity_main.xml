@@ -7,7 +7,28 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
+    <!--  功耗展示  -->
     <!-- 识别结果展示区域 -->
+
+    <!-- 翻译结果区域 -->
+
+
+    <TextView
+        android:id="@+id/usageResultText"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+
+        android:layout_margin="8dp"
+        android:layout_marginTop="4dp"
+        android:padding="4dp"
+        android:scrollbars="vertical"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toTopOf="@+id/recognitionResultText"
+        app:layout_constraintEnd_toEndOf="parent"
+
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <TextView
         android:id="@+id/recognitionResultText"
         android:layout_width="0dp"
@@ -18,11 +39,12 @@
         android:textSize="16sp"
         app:layout_constraintBottom_toTopOf="@+id/translationResultText"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_percent="0.3"
+        app:layout_constraintHorizontal_bias="1.0"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintHeight_percent="0.4"/>
+        app:layout_constraintVertical_bias="0.891" />
 
-    <!-- 翻译结果区域 -->
     <TextView
         android:id="@+id/translationResultText"
         android:layout_width="0dp"

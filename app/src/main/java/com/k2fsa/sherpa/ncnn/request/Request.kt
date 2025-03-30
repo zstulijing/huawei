@@ -194,10 +194,13 @@ class Request {
             val jsonObject = JSONObject(responseText)
             
             val result = jsonObject.getString("result").lowercase()
+            val processTime = jsonObject.getString("process_time").toDouble() * 100
+            Log.e("latency", "边测 性别识别---服务器处理时间: ${processTime.toInt()} ms")
+
             return result
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
-            return ""
+            return "male"
         }
     }
 
@@ -226,6 +229,8 @@ class Request {
             val responseText = response.bodyAsText()
             val jsonObject = JSONObject(responseText)
             val result = jsonObject.getString("result")
+            val processTime = jsonObject.getString("process_time").toDouble()
+            Log.e("latency", "边测 手势识别---服务器处理时间: ${processTime.toInt()} ms")
             return result
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
