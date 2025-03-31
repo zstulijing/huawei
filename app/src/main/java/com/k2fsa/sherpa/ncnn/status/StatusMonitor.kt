@@ -46,6 +46,11 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
     private val _cpuTempStats = MutableLiveData<CpuTempStats>()
     val cpuTempStats: LiveData<CpuTempStats> get() = _cpuTempStats
     private var tempMonitorJob: Job? = null
+
+    private val temperatureLiveData = MutableLiveData<Float>()
+    private var temperatureMonitorJob: Job? = null
+
+
     // 常见温度传感器路径（按优先级排序）
     private val thermalSensorPaths = listOf(
         "/sys/devices/virtual/thermal/thermal_zone%d/temp",
@@ -103,22 +108,6 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
     fun stopMemoryMonitoring() {
         memoryMonitorJob?.cancel()
         memoryMonitorJob = null
-    }
-
-    fun startTempMonitoring() {
-        stopTempMonitoring()
-
-        tempMonitorJob = mainScope.launch {
-            while (isActive) {
-                collectCpuTemperature()
-                delay(5_000) // 与电量监控保持同步
-            }
-        }
-    }
-    // 停止温度监控
-    fun stopTempMonitoring() {
-        tempMonitorJob?.cancel()
-        tempMonitorJob = null
     }
 
     fun checkAndLogSensor(path: String) {
@@ -363,5 +352,46 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
 
     private fun bytesToMb(bytes: Long): Long {
         return bytes / (1024 * 1024)
+    }
+
+    // 新增温度监控启动方法
+    fun startTemperatureMonitoring() {
+        stopTemperatureMonitoring() // 防止重复启动
+        temperatureMonitorJob = mainScope.launch {
+            while (isActive) {
+                delay(5_000) // 每5秒采集一次
+                collectTemperatureStats()
+            }
+        }
+    }
+
+    // 停止温度监控
+    fun stopTemperatureMonitoring() {
+        temperatureMonitorJob?.cancel()
+        temperatureMonitorJob = null
+    }
+
+    // 获取温度LiveData
+    fun getTemperatureStats(): LiveData<Float> = temperatureLiveData
+
+    // 温度采集实现
+    private fun collectTemperatureStats() {
+        mainScope.launch(Dispatchers.IO) {
+            try {
+                // 读取温度节点文件
+                val tempFile = File("/sys/devices/virtual/thermal/thermal_zone0/temp")
+                if (tempFile.exists()) {
+                    val temperature = tempFile.readText().trim().toIntOrNull()
+                    temperature?.let {
+                        // 转换为摄氏度（假设值单位为毫摄氏度）
+                        val celsius = it / 1000f
+                        temperatureLiveData.postValue(celsius)
+                        Log.d("usage", "CPU实时温度: ${"%.1f".format(celsius)}°C")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("usage", "温度读取失败", e)
+            }
+        }
     }
 }

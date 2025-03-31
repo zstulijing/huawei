@@ -140,13 +140,15 @@ public class KokoroTTS(private val context: Context) {
         track.pause()
         track.flush()
         track.play()
-
+        val startTime = System.currentTimeMillis() // 记录开始时间
         try {
             tts.generateWithCallback(
                 text = text,
                 sid = speakerId,
                 speed = speed,
                 callback = { samples ->
+                    val elapsedTime = System.currentTimeMillis() - startTime // 计算经过时间
+                    Log.e("latency", "端侧 文本转语音--经过时间: $elapsedTime ms")
                     if (!stopped) {
                         track.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
                         1

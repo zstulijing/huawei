@@ -27,7 +27,8 @@ class Request {
     /**
      * 服务器IP地址
      */
-    val baseUrl: String = "10.109.246.210"
+//    val baseUrl: String = "10.109.246.210"
+    val baseUrl: String = "192.168.2.2"
 
     // 创建带超时的 HttpClient
     private fun createClient(): HttpClient {
@@ -137,25 +138,29 @@ class Request {
         try {
 
             @Serializable
-            data class TextPostData(val input: String, val language: String, val gender: String)
+            data class TextPostData(val input: String, val gender: String)
             @Serializable
-            class SoundResponseData(val code: Int, val result: FloatArray, val process_time: Double)
+            class SoundResponseData(val code: Int, val result: FloatArray, val process_time: Double, val sample_rate: Int)
             val client = HttpClient(CIO) {
                 install(ContentNegotiation) { json() } // JSON 解析插件
             }
             val port = 10002
             val url = "http://$baseUrl:$port/text_to_speech"
-            val textPostData = TextPostData(inputText, language, gender)
-
+            val textPostData = TextPostData(inputText, gender)
+            val startTime = System.currentTimeMillis()
             val response: SoundResponseData = client.post(url) {
                 contentType(ContentType.Application.Json)  // 设置请求内容类型
                 setBody(textPostData)  // 发送 JSON 数据
             }.body()
+            val endTime = System.currentTimeMillis()
+
+            Log.e("latency", "边测 文本转语音--服务器处理时间: ${(response.process_time * 1000).toInt()} ms")
+            Log.e("latency", "边测 文本转语音--经过时间: ${endTime - startTime} ms")
             val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
             val filename = "video_${System.currentTimeMillis()}.mp3"
             val filePath = "$storageDir/$filename"
 
-            val sampleRate = 24000
+            val sampleRate = 44100
             saveFloatArrayAsWav(response.result, sampleRate, filePath)
             Log.e("result", "语音文件存储路径：$filePath")
             return filePath // 返回文件路径

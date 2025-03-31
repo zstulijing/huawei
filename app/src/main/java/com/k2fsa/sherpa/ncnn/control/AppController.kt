@@ -49,7 +49,7 @@ import kotlinx.coroutines.sync.withLock
 
 
 /**
- * 查看网络时延 - tag:latency
+ * 查看时延 - tag:latency
  * 查看电量/CPU/内存/温度 - tag:usage
  * 查看控制逻辑 - tag:controller
  * 查看模块结果 - tag:result
@@ -67,9 +67,9 @@ class AppController private constructor() {
      * [3]: 图像识别男女
      * [4]: 图像识别手势
      */
-    private var outVector = intArrayOf(-1, -1, -1, -1, 0)
+    private var outVector = intArrayOf(0, 0, 1, 0, 0)
     private var trans = false
-
+    private var firstToken: Long = 0L
 
     // Modules
     private val logger = Logger(this::class.java.simpleName)
@@ -134,8 +134,10 @@ class AppController private constructor() {
     private var messageId: Int = 0
     private var isStart = true
     private var translatedText: TranslatedText = TranslatedText("", messageId, "")
-    private var flowStartTime: Long = 0L
-
+    private var flowStartTime1: Long = 0L
+    private var flowStartTime3: Long = 0L
+    private var flowEnd = true
+    private var flowStartTime5: Long = 0L
     // 文本转语音
     private lateinit var kokoroTTS: KokoroTTS
 
@@ -205,6 +207,8 @@ class AppController private constructor() {
         // 初始化状态检测接收器
         statusMonitor.registerBatteryReceiver(activity)
 
+
+
         setupEventListeners()
         isInitialized = true
     }
@@ -248,11 +252,13 @@ class AppController private constructor() {
 
                     if (outVector[2] == 0) {
                         audioMutex.withLock {
+
                             if (paramGender == "male") {
                                 kokoroTTS.speak(text, 60)
                             } else if (paramGender == "female") {
                                 kokoroTTS.speak(text, 0)
                             }
+
                         }
                     } else if (outVector[2] == 1) {
                         // 生成音频文件
@@ -314,8 +320,8 @@ class AppController private constructor() {
         var interval = 0.1 // 本地文本转语音 默认间隔100ms
         if (outVector[0] == 1) {
             // 端侧文本转语音 -> 中英互译 -> 设置间隔为400ms
-            interval = 0.4  // 一般环境
-//            interval = 0.5 // 服务器环境
+//            interval = 0.4  // 一般环境
+            interval = 0.5 // 服务器环境
         }
         audioRecorder.startRecording(interval) { samples ->
 
@@ -327,18 +333,24 @@ class AppController private constructor() {
                 if (soundToTextResult == "<|WS|>") { // 特殊控制字符，边测文本转语音+中英互译
                     // 计算样本的 RMS（均方根）值
                     val rms = calculateRMS(samples)
-                    val silenceThreshold = 0.01f // 一般环境
-//                    val silenceThreshold = 0.08f // 服务器环境
+//                    val silenceThreshold = 0.01f // 一般环境
+                    val silenceThreshold = 0.08f // 服务器环境
 
                     // 判断是否为空语音
                     if (rms < silenceThreshold) {
                         // 空语音
 //                        Log.e("test", "空音频")
                         _soundResultFlow.emit(FloatArray(0)) // 发送空数组到流，同时指定id = -1（断句标识）
+                        if (!flowEnd) {
+                            flowStartTime3 = System.currentTimeMillis()
+                            flowStartTime5 = System.currentTimeMillis()
+                            flowEnd = true
+                        }
                     } else {
                         // 非空语音
 //                        Log.e("test", "非空")
                         _soundResultFlow.emit(samples) // 发送 samples (FloatArray) 到流
+                        flowEnd = false
                     }
 
                 } else if (soundToTextResult != "") { // 本地文本转语音，且转出来的值不是空
@@ -404,8 +416,7 @@ class AppController private constructor() {
         // 状态监控
         statusMonitor.startPowerMonitoring()
         statusMonitor.startMemoryMonitoring()
-        statusMonitor.startTempMonitoring()
-
+        statusMonitor.startTemperatureMonitoring()
         // websocket建立连接
         coroutineScope.launch {
             initTranslateWebSocket()
@@ -454,7 +465,7 @@ class AppController private constructor() {
         statusMonitor.unregisterBatteryReceiver()
         statusMonitor.stopPowerMonitoring()
         statusMonitor.stopMemoryMonitoring()
-        statusMonitor.stopTempMonitoring()
+        statusMonitor.stopTemperatureMonitoring()
 
         // 清理协程
         cameraJob.cancel()
@@ -606,7 +617,7 @@ class AppController private constructor() {
                     session.send(json)
                     translatedText.id = messageId
                     messageId++
-                    flowStartTime = System.currentTimeMillis()
+                    flowStartTime1 = System.currentTimeMillis()
                 }
             }
         } catch (e: Exception) {
@@ -638,7 +649,11 @@ class AppController private constructor() {
                                 // 首token，清空屏幕，也是计时的标志
                                 eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
                                 isStart = false
-                                Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime} ms")
+                                if (outVector[0] == 0) { // 路径1
+                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime1} ms")
+                                } else if (outVector[0] == 1 && !trans) { // 路径3
+                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime3} ms")
+                                }
                             }
                             eventBus.publish(EventBus.Event.TRANSLATION_RESULT, data.content)
                             translatedText.text += data.content
@@ -688,6 +703,7 @@ class AppController private constructor() {
                         val data = Json.decodeFromString<AudioResponseMessage>(response)
                         Log.e("websocket", "10003收到: msg_id=${data.msg_id}, content=${data.content}")
                         if (trans) {
+                            Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime5} ms")
                             // 10003返回的是译文
                             // 服务器非流式输出
                             eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
