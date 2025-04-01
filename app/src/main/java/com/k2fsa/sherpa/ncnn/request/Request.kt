@@ -27,8 +27,8 @@ class Request {
     /**
      * 服务器IP地址
      */
-//    val baseUrl: String = "10.109.246.210"
-    val baseUrl: String = "192.168.2.2"
+    val baseUrl: String = "10.109.246.210"
+//    val baseUrl: String = "192.168.2.2"
 
     // 创建带超时的 HttpClient
     private fun createClient(): HttpClient {
@@ -154,7 +154,7 @@ class Request {
             }.body()
             val endTime = System.currentTimeMillis()
 
-            Log.e("latency", "边测 文本转语音--服务器处理时间: ${(response.process_time * 1000).toInt()} ms")
+            Log.e("latency", "边测 文本转语音--服务器处理时间: ${(response.process_time * 1000).toLong()} ms")
             Log.e("latency", "边测 文本转语音--经过时间: ${endTime - startTime} ms")
             val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
             val filename = "video_${System.currentTimeMillis()}.mp3"
@@ -200,7 +200,7 @@ class Request {
             
             val result = jsonObject.getString("result").lowercase()
             val processTime = jsonObject.getString("process_time").toDouble() * 100
-            Log.e("latency", "边测 性别识别---服务器处理时间: ${processTime.toInt()} ms")
+            Log.e("latency", "边测 性别识别---服务器处理时间: ${processTime.toLong()} ms")
 
             return result
         } catch (e: Exception) {
@@ -235,7 +235,7 @@ class Request {
             val jsonObject = JSONObject(responseText)
             val result = jsonObject.getString("result")
             val processTime = jsonObject.getString("process_time").toDouble()
-            Log.e("latency", "边测 手势识别---服务器处理时间: ${processTime.toInt()} ms")
+            Log.e("latency", "边测 手势识别---服务器处理时间: ${processTime.toLong()} ms")
             return result
         } catch (e: Exception) {
             Log.e("Error", "错误: ${e.localizedMessage}")
@@ -243,38 +243,59 @@ class Request {
         }
     }
 
+
     /**
-     * http中英互译（已废弃）
+     * 生成随机字符串
+     * @return {Double} - bandwidth Mbps
      */
-    @Deprecated("Use translateFlow() instead", ReplaceWith("translateFlow()"))
-    suspend fun translate(inputText: String): String {
-        val client = createClient()
-        try {
-
-            val port = 10005
-            val url = "http://$baseUrl:$port/translate_text"
-
-            // 手动构造请求的 JSON 字符串
-            val jsonRequestBody = """{"input": "$inputText"}"""
-
-            val response: HttpResponse = client.post(url) {
-                contentType(ContentType.Application.Json) // 设置请求内容类型
-                setBody(jsonRequestBody) // 发送 JSON 字符串
-            }
-
-            // 获取响应文本并手动解析 JSON
-            val responseText = response.bodyAsText()
-            val jsonResponse = JSONObject(responseText)
-            val result = jsonResponse.getString("result") // 提取 "result" 字段
-
-            client.close()
-            return result // 返回翻译结果
-        } catch (e: Exception) {
-            Log.e("Error", "错误: ${e.localizedMessage}")
-            return ""
-        } finally {
-            client.close()
-        }
+    private fun randomString(size: Int): String {
+        val chars = ('A'..'Z') + ('a'..'z')  // 生成大写+小写字母
+        return (1..size)
+            .map { chars.random() }
+            .joinToString("")
     }
 
+    suspend fun testSpeed(size: Int): Double {
+        try {
+
+            @Serializable
+            data class TestSpeedData(val type: String, val size: Int, val temp: String)
+
+            @Serializable
+            class TestSpeeddResponseData(
+                val code: Int,
+                val content: String,
+                val process_time: Double,
+                val receive_time: Long,
+                val server_timestamp: Long
+            )
+
+            val client = HttpClient(CIO) {
+                install(ContentNegotiation) { json() } // JSON 解析插件
+            }
+            val port = 10005
+            val url = "http://$baseUrl:$port/test_speed"
+
+            val temp = randomString(size)
+
+            val testSpeedDate = TestSpeedData("test_up", size, temp)
+
+            val startTime = System.currentTimeMillis()
+
+            val response: TestSpeeddResponseData = client.post(url) {
+                contentType(ContentType.Application.Json)  // 设置请求内容类型
+                setBody(testSpeedDate)  // 发送 JSON 数据
+            }.body()
+
+            val endTime = System.currentTimeMillis()
+            val elapsedTime = endTime - startTime
+            val processTime = response.process_time
+            Log.e("speed", "$elapsedTime $processTime $size")
+            return (size * 2 * 8) / (elapsedTime - processTime) * 1.0
+
+        } catch (e: Exception) {
+            Log.e("exception", "错误: ${e.localizedMessage}")
+            return 0.0
+        }
+    }
 }

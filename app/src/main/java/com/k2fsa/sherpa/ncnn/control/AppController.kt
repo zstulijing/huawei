@@ -25,6 +25,7 @@ import com.k2fsa.sherpa.ncnn.request.Request
 import com.k2fsa.sherpa.ncnn.request.TextMessage
 import com.k2fsa.sherpa.ncnn.request.RegisterMessage
 import com.k2fsa.sherpa.ncnn.request.TranslatedText
+import com.k2fsa.sherpa.ncnn.request.getAvgRTT
 import com.k2fsa.sherpa.ncnn.speaker.AudioPlayer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.*
@@ -67,8 +68,8 @@ class AppController private constructor() {
      * [3]: 图像识别男女
      * [4]: 图像识别手势
      */
-    private var outVector = intArrayOf(0, 0, 1, 0, 0)
-    private var trans = false
+    private var outVector = intArrayOf(-1, -1, -1, -1, -1)
+    private var whisper = false
     private var firstToken: Long = 0L
 
     // Modules
@@ -119,6 +120,7 @@ class AppController private constructor() {
     // websocket
     private lateinit var translateWebSocketSession: DefaultClientWebSocketSession
     private lateinit var soundToTextWebSocketSession: DefaultClientWebSocketSession
+    private lateinit var whisperWebSocketSession: DefaultClientWebSocketSession
     private var webSocketClient: HttpClient = HttpClient(CIO) {
         install(WebSockets)
     }
@@ -174,26 +176,15 @@ class AppController private constructor() {
         /**
          * 初始化卸载向量
          */
+//        coroutineScope.launch {
+//            for (i in 0 .. 10) {
+//                val bandwidth = request.testSpeed(2000 * 1000) // 1MB
+//                Log.e("speed", "当前网络带宽约为 ${bandwidth / 1024} Mb/s")
+//            }
+//        }
+        // 测试RTT
+        Log.e("speed", "RTT: ${getAvgRTT(request.baseUrl)} ms")
 //        outVector = algorithm.outputVector()
-
-        /**
-         * 1、中文1（长音频）
-         * 2、中文2（短音频）
-         * 3、英语1（短音频）
-         * 4、英语4（长音频）
-         */
-        // 设置路径1（需要adb启动服务❗❗❗️）
-//        outVector = algorithm.setPathOne()
-        // 设置路径2
-//        outVector = algorithm.setPathTwo()
-        // 设置路径3
-//        outVector = algorithm.setPathThree()
-//        trans = false
-        // 设置路径4
-//        outVector = algorithm.setPathFour()
-        // 设置路径5
-//        outVector = algorithm.setPathFive()
-//        trans = true
 
 
         // 初始化卸载控制器
@@ -206,6 +197,7 @@ class AppController private constructor() {
         statusMonitor = StatusMonitor(mainScope, context, eventBus)
         // 初始化状态检测接收器
         statusMonitor.registerBatteryReceiver(activity)
+
 
 
 
@@ -321,12 +313,13 @@ class AppController private constructor() {
         if (outVector[0] == 1) {
             // 端侧文本转语音 -> 中英互译 -> 设置间隔为400ms
 //            interval = 0.4  // 一般环境
-            interval = 0.5 // 服务器环境
+            interval = 0.6 // 服务器环境
         }
         audioRecorder.startRecording(interval) { samples ->
 
 
             recordScope.launch {
+
                 // 先进行语音转文本
                 val soundToTextResult: String = unloadController.soundToText(speechRecognizer, eventBus, request, samples)
 
@@ -334,7 +327,7 @@ class AppController private constructor() {
                     // 计算样本的 RMS（均方根）值
                     val rms = calculateRMS(samples)
 //                    val silenceThreshold = 0.01f // 一般环境
-                    val silenceThreshold = 0.08f // 服务器环境
+                    val silenceThreshold = 0.045f // 服务器环境
 
                     // 判断是否为空语音
                     if (rms < silenceThreshold) {
@@ -417,13 +410,22 @@ class AppController private constructor() {
         statusMonitor.startPowerMonitoring()
         statusMonitor.startMemoryMonitoring()
         statusMonitor.startTemperatureMonitoring()
+
         // websocket建立连接
-        coroutineScope.launch {
-            initTranslateWebSocket()
+        if (whisper) {
+            coroutineScope.launch {
+                initWhisperWebSocket()
+            }
+        } else if (outVector[0] == 1 || outVector[1] == 1) {
+            coroutineScope.launch {
+                initTranslateWebSocket()
+            }
+            coroutineScope.launch {
+                initSoundToTextWebSocket()
+            }
         }
-        coroutineScope.launch {
-            initSoundToTextWebSocket()
-        }
+
+
     }
 
     /**
@@ -603,6 +605,29 @@ class AppController private constructor() {
         }
     }
 
+    private suspend fun initWhisperWebSocket() {
+        try {
+            val port = 10006
+//            Log.e("websocket", "ws://${request.baseUrl}:$port")
+            webSocketClient.webSocket("ws://${request.baseUrl}:$port") {
+                whisperWebSocketSession = this
+                Log.e("websocket", "已连接到whisper WebSocket 服务器 (10006)！")
+                // 注册逻辑保持不变
+                val registerMsg = RegisterMessage("client_001", "APP", "LeiNiao")
+                send(Json.encodeToString(registerMsg))
+                Log.e("websocket", "已发送注册信息：$registerMsg")
+
+                coroutineScope {
+                    launch { sendSoundToTextData(this@webSocket) }
+                    launch { receiveSoundData(this@webSocket) }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("exception", "连接错误: ${e.message}")
+        }
+    }
+
+
     // 翻译数据生成
     private fun generateTranslateData(textResult: String, msgId: Int): Flow<TextMessage> = flow {
         emit(TextMessage(msgId, textResult))
@@ -651,7 +676,7 @@ class AppController private constructor() {
                                 isStart = false
                                 if (outVector[0] == 0) { // 路径1
                                     Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime1} ms")
-                                } else if (outVector[0] == 1 && !trans) { // 路径3
+                                } else if (outVector[0] == 1 && !whisper) { // 路径3
                                     Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime3} ms")
                                 }
                             }
@@ -669,14 +694,14 @@ class AppController private constructor() {
     }
 
     // 语音数据生成
-    private fun generateSoundData(id: String, msgId: Int, samples: FloatArray, trans: Boolean, sampleRate: Int): Flow<AudioMessage> = flow {
-        emit(AudioMessage(id, msgId, samples, trans, sampleRate))
+    private fun generateSoundData(id: String, msgId: Int, samples: FloatArray, sampleRate: Int): Flow<AudioMessage> = flow {
+        emit(AudioMessage(id, msgId, samples, sampleRate))
     }
-    // 发送语音数据
+    // 发送语音数据 or Whisper数据
     private suspend fun sendSoundToTextData(session: DefaultClientWebSocketSession) {
         try {
             soundResultFlow.collect { soundResult ->
-                generateSoundData("client_001", messageId, soundResult, trans, 16000).collect { data ->
+                generateSoundData("client_001", messageId, soundResult, 16000).collect { data ->
                     if (soundResult.isEmpty()) {
                         data.msg_id = -1
                     }
@@ -693,7 +718,7 @@ class AppController private constructor() {
             Log.e("exception", "发送语音数据时出错: ${e.message}")
         }
     }
-    // 接收语音数据：语音转文本结果 或 翻译结果（whisper）
+    // 接收语音数据：语音转文本结果  or whisper数据
     private suspend fun receiveSoundData(session: DefaultClientWebSocketSession) {
         try {
             for (frame in session.incoming) {
@@ -701,34 +726,35 @@ class AppController private constructor() {
                     val response = frame.readText()
                     try {
                         val data = Json.decodeFromString<AudioResponseMessage>(response)
-                        Log.e("websocket", "10003收到: msg_id=${data.msg_id}, content=${data.content}")
-                        if (trans) {
-                            Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime5} ms")
-                            // 10003返回的是译文
-                            // 服务器非流式输出
-                            eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
-                            translatedText.text = data.content
-                            translatedText.id = -1
-                            if (isChinese(data.content)) {
-                                translatedText.language = "zh"
-                                val tokens = tokenizeChinese(data.content)
-                                tokens.forEach {
-                                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, it)
-                                    delay(50)
-                                }
-                            } else {
+                        if (whisper) {
+                            Log.e("websocket", "10006收到: msg_id=${data.msg_id}, content=${data.content}")
+                            if (data.content == "<|EN|>") {
+                                isStart = true
                                 translatedText.language = "en"
-                                val tokens = tokenizeEnglish(data.content)
-                                tokens.forEach {
-                                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "$it ")
-                                    delay(50)
+                                eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
+                            } else if (data.content == "<|CN|>") {
+                                isStart = true
+                                translatedText.language = "zh"
+                                eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
+                            } else  {
+                                // 不是结束符
+                                if (isStart) {
+                                    // 首token，清空屏幕，也是计时的标志
+                                    eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
+                                    isStart = false
+                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime5} ms")
+
                                 }
+                                eventBus.publish(EventBus.Event.TRANSLATION_RESULT, data.content)
+                                translatedText.text += data.content
                             }
-                            eventBus.publish(EventBus.Event.TEXT_TO_SOUND, translatedText)
                         } else {
+                            Log.e("websocket", "10003收到: msg_id=${data.msg_id}, content=${data.content}")
                             // 10003返回的是原文
                             eventBus.publish(EventBus.Event.SPEECH_RESULT, data.content)
                         }
+
+
                     } catch (e: Exception) {
                         Log.e("exception", "收到无效的 JSON 数据: $response")
                     }
@@ -738,6 +764,9 @@ class AppController private constructor() {
             Log.e("exception", "接收数据时出错: ${e.message}")
         }
     }
+
+
+
 
     fun setRecognitionCallback(callback: (String) -> Unit) {
         recognitionCallback = callback
