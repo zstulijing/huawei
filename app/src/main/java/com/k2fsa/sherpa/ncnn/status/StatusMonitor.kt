@@ -23,6 +23,7 @@ import java.io.FileReader
 import kotlinx.coroutines.isActive
 import java.io.File
 import java.io.FileNotFoundException
+import java.util.Locale
 
 class StatusMonitor(private val mainScope: CoroutineScope, private val context: Context, private val event: EventBus) {
 
@@ -76,10 +77,10 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
 
         powerMonitorJob = mainScope.launch {
             while (true) {
-                // 每5秒收集一次数据
-                delay(5_000)
                 collectBatteryStats()
                 collectCpuUsage()
+                // 每5秒收集一次数据
+                delay(5_000)
             }
         }
     }
@@ -264,8 +265,10 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
             Log.d("usage",
                 "能耗统计 - 当前电流: ${current}A | 当前电压: ${voltage}V | 当前功率: ${power}W")
 
-            event.publish(EventBus.Event.USAGE, "能耗统计 - 当前电流: ${current}A | 当前电压: ${voltage}V | 当前功率: ${power}W")
-
+            // 发布电量
+            event.publish(EventBus.Event.BATTERY, "$currentLevel")
+            // 发布功率
+            event.publish(EventBus.Event.POWER, String.format(Locale.US, "%.3f", power))
         }
     }
 
@@ -359,8 +362,9 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
         stopTemperatureMonitoring() // 防止重复启动
         temperatureMonitorJob = mainScope.launch {
             while (isActive) {
-                delay(5_000) // 每5秒采集一次
+
                 collectTemperatureStats()
+                delay(5_000) // 每5秒采集一次
             }
         }
     }
@@ -387,6 +391,7 @@ class StatusMonitor(private val mainScope: CoroutineScope, private val context: 
                         val celsius = it / 1000f
                         temperatureLiveData.postValue(celsius)
                         Log.d("usage", "CPU实时温度: ${"%.1f".format(celsius)}°C")
+                        event.publish(EventBus.Event.TEMPERATURE, "%.1f".format(celsius))
                     }
                 }
             } catch (e: Exception) {

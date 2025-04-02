@@ -16,7 +16,14 @@ class EventBus {
         GENDER_DETECTED,
         ERROR,
         TEXT_TO_SOUND,
-        USAGE
+        USAGE,
+        BAND_WIDTH,
+        RTT,
+        BATTERY,
+        ALGORITHM,
+        FIRST_TOKEN,
+        POWER,
+        TEMPERATURE
     }
 
     fun subscribe(event: Event, listener: (Any) -> Unit) {

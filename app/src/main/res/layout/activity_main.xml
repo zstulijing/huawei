@@ -1,116 +1,318 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
-    <!--  功耗展示  -->
-    <!-- 识别结果展示区域 -->
-
-    <!-- 翻译结果区域 -->
-
-
-    <TextView
-        android:id="@+id/usageResultText"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-
-        android:layout_margin="8dp"
-        android:layout_marginTop="4dp"
-        android:padding="4dp"
-        android:scrollbars="vertical"
-        android:textSize="12sp"
-        app:layout_constraintBottom_toTopOf="@+id/recognitionResultText"
-        app:layout_constraintEnd_toEndOf="parent"
-
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <TextView
-        android:id="@+id/recognitionResultText"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_margin="8dp"
-        android:padding="16dp"
-        android:scrollbars="vertical"
-        android:textSize="16sp"
-        app:layout_constraintBottom_toTopOf="@+id/translationResultText"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHeight_percent="0.3"
-        app:layout_constraintHorizontal_bias="1.0"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.891" />
-
-    <TextView
-        android:id="@+id/translationResultText"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_margin="8dp"
-        android:padding="16dp"
-        android:textSize="16sp"
-        app:layout_constraintBottom_toTopOf="@+id/status_container"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHeight_percent="0.3"
-        app:layout_constraintStart_toStartOf="parent"/>
-
-    <!-- 状态信息容器 -->
     <LinearLayout
-        android:id="@+id/status_container"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="8dp"
-        app:layout_constraintBottom_toTopOf="@+id/button_container"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
-
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="14sp"/>
-
-        <TextView
-            android:id="@+id/gestureStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="14sp"/>
-
-        <TextView
-            android:id="@+id/genderStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="14sp"/>
-    </LinearLayout>
-
-    <!-- 按钮容器 -->
-    <LinearLayout
-        android:id="@+id/button_container"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:padding="16dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
+        android:weightSum="2">
 
-        <Button
-            android:id="@+id/startButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/start"
-            android:layout_marginEnd="8dp"/>
+        <!-- 左侧分屏 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center">
 
-        <Button
-            android:id="@+id/stopButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/stop"
-            android:enabled="false"/>
+            <!-- 顶部第一部分 -->
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="3">
+
+                <!-- 网络带宽 -->
+                <TextView
+                    android:id="@+id/left_bandwidth"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="带宽："/>
+
+                <!-- RTT -->
+                <TextView
+                    android:id="@+id/left_rtt"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="RTT："/>
+
+                <!-- 电量 -->
+                <TextView
+                    android:id="@+id/left_battery"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="电量："/>
+            </LinearLayout>
+
+            <!-- 顶部第二部分 -->
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="3">
+
+                <!-- 使用策略 -->
+                <TextView
+                    android:id="@+id/left_algorithm"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="使用策略："/>
+
+                <!-- 功耗 -->
+                <TextView
+                    android:id="@+id/left_power"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="功耗："/>
+
+                <!-- 温度 -->
+                <TextView
+                    android:id="@+id/left_temperature"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="CPU温度："/>
+            </LinearLayout>
+
+            <!-- 顶部第三部分 -->
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="1">
+
+                <!-- 首Token时延 -->
+                <TextView
+                    android:id="@+id/left_first_token"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="首Token时延："/>
+
+
+            </LinearLayout>
+
+
+            <TextView
+                android:id="@+id/translation_text_left"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="16dp"
+                android:gravity="center"
+                android:textSize="18sp"
+                android:textColor="#FFFFFF"
+                android:scrollbars="vertical"
+                android:background="@android:color/transparent"
+                android:text="翻译文本："/>
+
+        </LinearLayout>
+
+        <!-- 右侧分屏 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center">
+
+            <!-- 顶部第一部分 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="3">
+
+                <!-- 网络带宽 -->
+                <TextView
+                    android:id="@+id/right_bandwidth"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="带宽："/>
+
+                <!-- RTT -->
+                <TextView
+                    android:id="@+id/right_rtt"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="RTT："/>
+
+                <!-- 电量 -->
+                <TextView
+                    android:id="@+id/right_battery"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:scrollbars="vertical"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:text="电量："/>
+            </LinearLayout>
+
+            <!-- 顶部第二部分 -->
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="3">
+
+                <!-- 使用策略 -->
+                <TextView
+                    android:id="@+id/right_algorithm"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="使用策略："/>
+
+                <!-- 功耗 -->
+                <TextView
+                    android:id="@+id/right_power"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="功耗："/>
+
+                <!-- 温度 -->
+                <TextView
+                    android:id="@+id/right_temperature"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="CPU温度："/>
+
+            </LinearLayout>
+
+            <!-- 顶部第三部分 -->
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="1">
+
+                <!-- 首Token时延 -->
+                <TextView
+                    android:id="@+id/right_first_token"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:paddingLeft="16dp"
+                    android:paddingRight="16dp"
+                    android:gravity="center"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:scrollbars="vertical"
+                    android:text="首Token时延："/>
+
+
+            </LinearLayout>
+
+
+            <TextView
+                android:id="@+id/translation_text_right"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:padding="16dp"
+                android:gravity="center"
+                android:textSize="18sp"
+                android:textColor="#FFFFFF"
+                android:scrollbars="vertical"
+                android:background="@android:color/transparent"
+                android:text="翻译文本"/>
+
+        </LinearLayout>
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

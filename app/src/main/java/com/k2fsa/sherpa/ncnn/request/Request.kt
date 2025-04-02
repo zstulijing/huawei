@@ -197,8 +197,12 @@ class Request {
             val responseText = response.bodyAsText()
 
             val jsonObject = JSONObject(responseText)
-            
+
+//            Log.e("test", "边测 性别识别: ${responseText}")
+//            return ""
+
             val result = jsonObject.getString("result").lowercase()
+
             val processTime = jsonObject.getString("process_time").toDouble() * 100
             Log.e("latency", "边测 性别识别---服务器处理时间: ${processTime.toLong()} ms")
 

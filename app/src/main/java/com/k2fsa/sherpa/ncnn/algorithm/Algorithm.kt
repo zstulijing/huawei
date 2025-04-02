@@ -1,5 +1,7 @@
 package com.k2fsa.sherpa.ncnn.algorithm
 
+import com.k2fsa.sherpa.ncnn.control.EventBus
+
 /**
  * 卸载算法输出
  * [0]: 语音转文本
@@ -9,7 +11,7 @@ package com.k2fsa.sherpa.ncnn.algorithm
  * [4]: 图像识别手势
  */
 
-class Algorithm {
+class Algorithm(private val event: EventBus) {
 
     /**
      * 返回每个模块的固定延迟数据，包括本地延迟、边云延迟、上传延迟和下载延迟。
@@ -102,7 +104,9 @@ class Algorithm {
             val location = if (deployment[i] == 1) "本地" else "边云"
             println("${modules[i]}: $location (1=本地, 0=边云: ${deployment[i]})")
         }
-        return deployment.toIntArray()
+        val outVector = deployment.toIntArray()
+        event.publish(EventBus.Event.ALGORITHM, outVector.joinToString(", "))
+        return outVector
     }
 
     fun setPathOne(): IntArray {

@@ -68,10 +68,9 @@ class AppController private constructor() {
      * [3]: 图像识别男女
      * [4]: 图像识别手势
      */
-    private var outVector = intArrayOf(-1, -1, -1, -1, -1)
+    private var outVector = intArrayOf(-1, -1, -1, 1, -1)
     private var whisper = false
-    private var firstToken: Long = 0L
-
+    private var sttProcessingTime: Long = 0L
     // Modules
     private val logger = Logger(this::class.java.simpleName)
     private val eventBus = EventBus()
@@ -101,6 +100,14 @@ class AppController private constructor() {
     private var genderCallback: ((Gender) -> Unit)? = null
     private var statusCallback: ((String) -> Unit)? = null
     private var usageCallback: ((String) -> Unit)? = null
+    private var bandWidthCallback: ((String) -> Unit)? = null
+    private var rttCallback: ((String) -> Unit)? = null
+    private var batteryCallback: ((String) -> Unit)? = null
+    private var algorithmCallback: ((String) -> Unit)? = null
+    private var firstTokenCallback: ((String) -> Unit)? = null
+    private var powerCallback: ((String) -> Unit)? = null
+    private var temperatureCallback: ((String) -> Unit)? = null
+
 
     // State management
     private var isRecording = false
@@ -171,21 +178,7 @@ class AppController private constructor() {
 
         kokoroTTS = KokoroTTS(activity.baseContext)
 
-        algorithm = Algorithm()
-
-        /**
-         * 初始化卸载向量
-         */
-//        coroutineScope.launch {
-//            for (i in 0 .. 10) {
-//                val bandwidth = request.testSpeed(2000 * 1000) // 1MB
-//                Log.e("speed", "当前网络带宽约为 ${bandwidth / 1024} Mb/s")
-//            }
-//        }
-        // 测试RTT
-        Log.e("speed", "RTT: ${getAvgRTT(request.baseUrl)} ms")
-//        outVector = algorithm.outputVector()
-
+        algorithm = Algorithm(eventBus)
 
         // 初始化卸载控制器
         unloadController = UnloadController(outVector)
@@ -197,9 +190,6 @@ class AppController private constructor() {
         statusMonitor = StatusMonitor(mainScope, context, eventBus)
         // 初始化状态检测接收器
         statusMonitor.registerBatteryReceiver(activity)
-
-
-
 
         setupEventListeners()
         isInitialized = true
@@ -217,7 +207,6 @@ class AppController private constructor() {
     private val audioJob = Job() // 创建一个 Job 用于控制协程
     private val audioScope = CoroutineScope(Dispatchers.IO + audioJob)
     private val audioMutex = Mutex()
-
     private fun setupEventListeners() {
         // Handle speech recognition results
         eventBus.subscribe(EventBus.Event.SPEECH_RESULT) { data ->
@@ -287,6 +276,36 @@ class AppController private constructor() {
             val gender = data as Gender
             genderCallback?.invoke(gender)
         }
+
+        eventBus.subscribe(EventBus.Event.BAND_WIDTH) { data ->
+            val bandWidth = data as String
+            bandWidthCallback?.invoke(bandWidth)
+        }
+        eventBus.subscribe(EventBus.Event.RTT) { data ->
+            val rtt = data as String
+            rttCallback?.invoke(rtt)
+        }
+        eventBus.subscribe(EventBus.Event.BATTERY) { data ->
+            val battery = data as String
+            batteryCallback?.invoke(battery)
+        }
+        eventBus.subscribe(EventBus.Event.ALGORITHM) { data ->
+            val algorithm = data as String
+            algorithmCallback?.invoke(algorithm)
+        }
+        eventBus.subscribe(EventBus.Event.FIRST_TOKEN) { data ->
+            val firstToken = data as String
+            firstTokenCallback?.invoke(firstToken)
+        }
+        eventBus.subscribe(EventBus.Event.POWER) { data ->
+            val power = data as String
+            powerCallback?.invoke(power)
+        }
+        eventBus.subscribe(EventBus.Event.TEMPERATURE) { data ->
+            val temperature = data as String
+            temperatureCallback?.invoke(temperature)
+        }
+
     }
 
 
@@ -321,8 +340,11 @@ class AppController private constructor() {
             recordScope.launch {
 
                 // 先进行语音转文本
+                val startTime = System.currentTimeMillis()
                 val soundToTextResult: String = unloadController.soundToText(speechRecognizer, eventBus, request, samples)
+                sttProcessingTime = System.currentTimeMillis() - startTime
 
+                Log.e("latency", "端侧 语音转文本--经过时间: $sttProcessingTime ms")
                 if (soundToTextResult == "<|WS|>") { // 特殊控制字符，边测文本转语音+中英互译
                     // 计算样本的 RMS（均方根）值
                     val rms = calculateRMS(samples)
@@ -347,10 +369,16 @@ class AppController private constructor() {
                     }
 
                 } else if (soundToTextResult != "") { // 本地文本转语音，且转出来的值不是空
+                    val sttStart = System.currentTimeMillis() // 单位：毫秒
                     val localResultText = unloadController.translate(soundToTextResult, translationManager) {
                         // 服务端执行
                         _textResultFlow.emit(soundToTextResult) // 发送 soundToTextResult (String) 到流
                     }
+                    val elapsedTime = System.currentTimeMillis() - sttStart
+                    Log.e("latency", "端测 中英互译---经过时间: $elapsedTime ms")
+                    Log.e("latency", "路径1/4 首Token时延: ${sttProcessingTime + elapsedTime} ms")
+                    eventBus.publish(EventBus.Event.FIRST_TOKEN, "${sttProcessingTime + elapsedTime}")
+
                     if (localResultText != "") {
                         // 本地非流式输出
                         eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
@@ -392,15 +420,14 @@ class AppController private constructor() {
         // Stop audio recording
         audioRecorder.stopRecording()
 
-        // 停止监控
-        statusMonitor.startMemoryMonitoring()
-        statusMonitor.stopPowerMonitoring()
     }
 
     /**
      * 挂载生命周期
      */
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val timeJob = Job()
+    private val timeScope = CoroutineScope(Dispatchers.IO + timeJob)
     fun onResume() {
         checkInitialization()
         // Start periodic video capture for gesture and gender detection
@@ -425,7 +452,26 @@ class AppController private constructor() {
             }
         }
 
+        // 卸载算法：每五分钟执行一次
+        timeScope.launch {
+            while (true) {
+                algorithm.outputVector()
+                delay(5 * 60 * 1000)
+            }
+        }
 
+        // 网络带宽 / RTT：每一分钟执行一次
+        timeScope.launch {
+            while (true) {
+                val bandwidth = request.testSpeed(1000 * 1000) // 1MB
+                Log.e("speed", "当前网络带宽约为 ${bandwidth / 1024} Mb/s")
+                val rtt = getAvgRTT(request.baseUrl)
+                Log.e("speed", "RTT: $rtt ms")
+                eventBus.publish(EventBus.Event.BAND_WIDTH, "${bandwidth / 1024}")
+                eventBus.publish(EventBus.Event.RTT, "$rtt")
+                delay(1 * 60 * 1000)
+            }
+        }
     }
 
     /**
@@ -674,10 +720,15 @@ class AppController private constructor() {
                                 // 首token，清空屏幕，也是计时的标志
                                 eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
                                 isStart = false
-                                if (outVector[0] == 0) { // 路径1
-                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime1} ms")
+                                if (outVector[0] == 0) { // 路径2
+                                    val firstToken = System.currentTimeMillis() - flowStartTime1
+                                    Log.e("latency", "路径2 首token时延: ${sttProcessingTime + firstToken} ms")
+                                    eventBus.publish(EventBus.Event.FIRST_TOKEN, "${sttProcessingTime + firstToken}")
+
                                 } else if (outVector[0] == 1 && !whisper) { // 路径3
-                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime3} ms")
+                                    val firstToken = System.currentTimeMillis() - flowStartTime3
+                                    Log.e("latency", "路径3 首token时延: $firstToken ms")
+                                    eventBus.publish(EventBus.Event.FIRST_TOKEN, "$firstToken")
                                 }
                             }
                             eventBus.publish(EventBus.Event.TRANSLATION_RESULT, data.content)
@@ -742,8 +793,10 @@ class AppController private constructor() {
                                     // 首token，清空屏幕，也是计时的标志
                                     eventBus.publish(EventBus.Event.TRANSLATION_RESULT, "<|STX|>")
                                     isStart = false
-                                    Log.e("latency", "首token时延${System.currentTimeMillis() - flowStartTime5} ms")
-
+                                    // 路径5
+                                    val firstToken = System.currentTimeMillis() - flowStartTime5
+                                    Log.e("latency", "路径5 首token时延: $firstToken ms")
+                                    eventBus.publish(EventBus.Event.FIRST_TOKEN, "$firstToken")
                                 }
                                 eventBus.publish(EventBus.Event.TRANSLATION_RESULT, data.content)
                                 translatedText.text += data.content
@@ -791,6 +844,30 @@ class AppController private constructor() {
     fun setUsageCallback(callback: (String) -> Unit) {
         usageCallback = callback
     }
+
+    fun setBandWidthCallback(callback: (String) -> Unit) {
+        bandWidthCallback = callback
+    }
+    fun setRttCallback(callback: (String) -> Unit) {
+        rttCallback = callback
+    }
+    fun setBatteryCallback(callback: (String) -> Unit) {
+        batteryCallback = callback
+    }
+    fun setAlgorithmCallback(callback: (String) -> Unit) {
+        algorithmCallback = callback
+    }
+    fun setFirstTokenCallback(callback: (String) -> Unit) {
+        firstTokenCallback = callback
+    }
+    fun setPowerCallback(callback: (String) -> Unit) {
+        powerCallback = callback
+    }
+    fun setTemperatureCallback(callback: (String) -> Unit) {
+        temperatureCallback = callback
+    }
+
+
     companion object {
         @Volatile
         private var instance: AppController? = null

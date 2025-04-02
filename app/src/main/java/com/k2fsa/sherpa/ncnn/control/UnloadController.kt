@@ -70,7 +70,7 @@ class UnloadController(private var outVector: IntArray) {
             // 计算经过时间（单位：毫秒）
             val elapsedTime = endTime - startTime
             Log.e("result", "端测 中英互译---结果: $translatedResult")
-            Log.e("latency", "端测 中英互译---经过时间: $elapsedTime ms")
+//            Log.e("latency", "端测 中英互译---经过时间: $elapsedTime ms")
             return translatedResult
 
         } else if (outVector[1] == 1) { // 在服务器端执行
